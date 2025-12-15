@@ -6,189 +6,206 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
-#include <random>
 #include <vector>
 
-// ====== You mapped these in python ======
-static constexpr uintptr_t DATA_BASE = 0x10000000; // readWriteAddress
-static constexpr uintptr_t TEMP_BASE = 0x14000000; // resultTemporaryBufferAddress
-static constexpr uintptr_t CMD_BASE  = 0x15000000; // commandWriteAddress
+static constexpr uintptr_t DATA_BASE = 0x10000000;
+static constexpr uintptr_t TEMP_BASE = 0x14000000;
+static constexpr uintptr_t CMD_BASE  = 0x18000000;
 
-// ====== Geometry ======
-static constexpr int BANK_BITS   = 5;  // 32 banks
-static constexpr int COL_BITS    = 6;  // 2^6 bytes per row = 64B = 512 bits
-static constexpr int ROW_BYTES   = 1 << COL_BITS; // 64B
+static constexpr unsigned BANK_BITS  = 3;
+static constexpr unsigned MAT_BITS   = 4;
+static constexpr unsigned ARRAY_BITS = 4;
+static constexpr unsigned ROW_BITS   = 9;
+static constexpr unsigned COL_BITS   = 6;
 
-static constexpr int NUM_MAP     = 512; // bitvector width
-static constexpr int NUM_QUERY   = 4;
-static constexpr int VALUE_BITS  = 4;
+static constexpr size_t ROW_BYTES = (1ull << COL_BITS);
 
-static constexpr int DIMS           = 64;
-static constexpr int DIMS_PER_BANK  = 32;
-static constexpr int NUM_BANKS_USED = 2;
+static constexpr uint16_t ROW_A = 0;
+static constexpr uint16_t ROW_B = 1;
 
-// 32 dim * 8 rows = 256 rows
-static constexpr int MAP_ROWS_PER_BANK = DIMS_PER_BANK * 8; // 256
+static constexpr uint16_t DEST_AND = 10;
+static constexpr uint16_t DEST_OR  = 11;
+static constexpr uint16_t DEST_XOR = 12;
 
-static inline void set_bit(uint8_t *row64B, int idx, bool v) {
-    int byte = idx >> 3;
-    int bit  = idx & 7; // LSB-first: map0->bit0
-    uint8_t m = uint8_t(1u << bit);
-    if (v) row64B[byte] |= m;
-    else   row64B[byte] &= uint8_t(~m);
-}
-
-static inline bool get_bit(const uint8_t *row64B, int idx) {
-    int byte = idx >> 3;
-    int bit  = idx & 7;
-    return (row64B[byte] >> bit) & 1u;
-}
-
-// bank-local row mapping
-static inline uint8_t orig_row_local(int local_d, int b) { return uint8_t(local_d * 8 + b); }
-static inline uint8_t inv_row_local (int local_d, int b) { return uint8_t(local_d * 8 + (b + 4)); }
-
-// dim -> bank/local_d
-static inline uint8_t dim_bank(int d)  { return uint8_t(d / DIMS_PER_BANK); } // 0 or 1
-static inline int     dim_local(int d) { return d % DIMS_PER_BANK; }         // 0..31
-
-// golden: mismatch mask across DIMS (LSB=d0)
-static inline uint64_t golden_mask(const std::array<uint8_t, DIMS> &map,
-                                  const std::array<uint8_t, DIMS> &q)
+static void fill_pattern(uint8_t *buf, size_t n, uint32_t seed)
 {
-    uint64_t m = 0;
-    for (int d = 0; d < DIMS; ++d) {
-        if ((map[d] & 0xF) != (q[d] & 0xF)) m |= (1ull << d);
+    uint32_t x = seed ? seed : 1u;
+    for (size_t i = 0; i < n; i++) {
+        x = x * 1664525u + 1013904223u;
+        buf[i] = static_cast<uint8_t>((x >> 24) ^ (i * 13u));
     }
-    return m;
 }
 
-int main() {
+static void ref_and(uint8_t *out, const uint8_t *a, const uint8_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) out[i] = static_cast<uint8_t>(a[i] & b[i]);
+}
+
+static void ref_or(uint8_t *out, const uint8_t *a, const uint8_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) out[i] = static_cast<uint8_t>(a[i] | b[i]);
+}
+
+static void ref_xor(uint8_t *out, const uint8_t *a, const uint8_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) out[i] = static_cast<uint8_t>(a[i] ^ b[i]);
+}
+
+static bool equal_buf(const uint8_t *x, const uint8_t *y, size_t n, size_t &bad_i)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (x[i] != y[i]) {
+            bad_i = i;
+            return false;
+        }
+    }
+    return true;
+}
+
+static void dump_mismatch(const char *tag,
+                          uint16_t bank,
+                          uint16_t mat,
+                          uint16_t array,
+                          const uint8_t *got,
+                          const uint8_t *exp,
+                          size_t n)
+{
+    size_t bad_i = 0;
+    (void)equal_buf(got, exp, n, bad_i);
+
+    std::cout << "[FAIL] " << tag
+              << " bank=" << bank
+              << " mat=" << mat
+              << " array=" << array
+              << "\n  first mismatch at byte " << bad_i
+              << " got=0x" << std::hex << static_cast<int>(got[bad_i])
+              << " exp=0x" << static_cast<int>(exp[bad_i]) << std::dec
+              << "\n";
+}
+
+int main()
+{
     static_assert(ROW_BYTES == 64, "expect 64B row");
-    static_assert(NUM_MAP == 512, "expect 512 maps");
-    static_assert(DIMS == 64, "expect 64 dims");
-    static_assert(DIMS_PER_BANK * 8 == 256, "32 dims per bank must fill 256 rows");
-    static_assert(NUM_BANKS_USED == 2, "using 2 banks (bank0 + bank1)");
-    static_assert(MAP_ROWS_PER_BANK == 256, "expect 256 rows used per bank");
 
     auto *rw  = reinterpret_cast<volatile uint64_t *>(DATA_BASE);
     auto *tmp = reinterpret_cast<volatile uint64_t *>(TEMP_BASE);
     auto *cmd = reinterpret_cast<volatile uint64_t *>(CMD_BASE);
 
-    // 依照你目前 cim_api.hpp：CimModule(read_write, temp, command)
     CimModule cim(rw, tmp, cmd);
-    cim.setGeometry(BANK_BITS, COL_BITS);
+    cim.setGeometry(BANK_BITS, MAT_BITS, ARRAY_BITS, ROW_BITS, COL_BITS);
 
-    // ============ (ROI 外) 產生資料：maps + queries ============
-    std::mt19937 rng(12345);
-    std::uniform_int_distribution<int> dist(0, 15);
+    alignas(64) std::array<uint8_t, ROW_BYTES> a{};
+    alignas(64) std::array<uint8_t, ROW_BYTES> b{};
+    alignas(64) std::array<uint8_t, ROW_BYTES> got{};
+    alignas(64) std::array<uint8_t, ROW_BYTES> exp{};
 
-    std::array<std::array<uint8_t, DIMS>, NUM_MAP> maps{};
-    std::array<std::array<uint8_t, DIMS>, NUM_QUERY> queries{};
+    const uint16_t banks = 1u << BANK_BITS;
+    const uint16_t mats  = 1u << MAT_BITS;
+    const uint16_t arrays = 1u << ARRAY_BITS;
 
-    for (int i = 0; i < NUM_MAP; ++i)
-        for (int d = 0; d < DIMS; ++d)
-            maps[i][d] = uint8_t(dist(rng));
-
-    for (int q = 0; q < NUM_QUERY; ++q)
-        for (int d = 0; d < DIMS; ++d)
-            queries[q][d] = uint8_t(dist(rng));
-
-    // ============ (ROI 外) 寫入 maps 到 bank0/bank1 ============
-    for (int d = 0; d < DIMS; ++d) {
-        uint8_t bank = dim_bank(d);   // 0 or 1
-        int ld       = dim_local(d);  // 0..31
-
-        for (int b = 0; b < VALUE_BITS; ++b) {
-            uint8_t row_o[ROW_BYTES]; std::memset(row_o, 0, ROW_BYTES);
-            uint8_t row_i[ROW_BYTES]; std::memset(row_i, 0, ROW_BYTES);
-
-            for (int m = 0; m < NUM_MAP; ++m) {
-                bool bit = (maps[m][d] >> b) & 1u;
-                set_bit(row_o, m, bit);
-                set_bit(row_i, m, !bit);
-            }
-
-            cim.copy_to_cim(bank, orig_row_local(ld, b), row_o, ROW_BYTES);
-            cim.copy_to_cim(bank, inv_row_local (ld, b), row_i, ROW_BYTES);
-        }
-    }
-
-    // ============ ROI：只量你要的內容 ============
-    // ROI 期間：OR(cmd MMIO) + temp load + reconstruct+popcount + cim internal latency
-    // ROI 外：golden compare + print
-    alignas(64) std::array<std::array<uint64_t, NUM_MAP>, NUM_QUERY> masks_out{};
-    alignas(64) std::array<std::array<uint8_t,  NUM_MAP>, NUM_QUERY> scores_out{};
-
-    // Reset stats so "measured" stats start here
     m5_reset_stats(0, 0);
     m5_work_begin(0, 0);
 
-    for (int qi = 0; qi < NUM_QUERY; ++qi) {
+    for (uint16_t bank = 0; bank < banks; bank++) {
+        for (uint16_t mat = 0; mat < mats; mat++) {
+            for (uint16_t array = 0; array < arrays; array++) {
 
-        // 1) OR commands (CPU -> cmd MMIO), results go to TEMP[bank][dest=ld]
-        for (int d = 0; d < DIMS; ++d) {
-            uint8_t bank = dim_bank(d);
-            int ld       = dim_local(d);
+                uint32_t seedA = (static_cast<uint32_t>(bank) << 24)
+                               ^ (static_cast<uint32_t>(mat)  << 16)
+                               ^ (static_cast<uint32_t>(array) << 8)
+                               ^ 0xA5u;
+                uint32_t seedB = seedA ^ 0x5Au;
 
-            std::vector<uint8_t> rows;
-            rows.reserve(4);
-            for (int b = 0; b < VALUE_BITS; ++b) {
-                int qbit = (queries[qi][d] >> b) & 1u;
-                rows.push_back(qbit ? inv_row_local(ld, b) : orig_row_local(ld, b));
+                fill_pattern(a.data(), a.size(), seedA);
+                fill_pattern(b.data(), b.size(), seedB);
+
+                cim.copy_to_cim(bank, mat, array, ROW_A, a.data(), ROW_BYTES);
+                cim.copy_to_cim(bank, mat, array, ROW_B, b.data(), ROW_BYTES);
+
+                std::vector<uint16_t> rows{ROW_A, ROW_B};
+
+                cim.AND(rows,
+                        0xffu,
+                        CimModule::Mask::bank(bank),
+                        CimModule::Mask::colsAll(),
+                        DEST_AND,
+                        CimModule::Mask::mat(mat),
+                        CimModule::Mask::array(array));
+
+                cim.OR(rows,
+                       0xffu,
+                       CimModule::Mask::bank(bank),
+                       CimModule::Mask::colsAll(),
+                       DEST_OR,
+                       CimModule::Mask::mat(mat),
+                       CimModule::Mask::array(array));
+
+                cim.XOR(rows,
+                        0xffu,
+                        CimModule::Mask::bank(bank),
+                        CimModule::Mask::colsAll(),
+                        DEST_XOR,
+                        CimModule::Mask::mat(mat),
+                        CimModule::Mask::array(array));
             }
-
-            cim.OR(rows,
-                   /*byte_mask=*/0xff,
-                   /*bank_mask=*/CimModule::Mask::bank(bank),
-                   /*column_mask=*/CimModule::Mask::colsAll(),
-                   /*dest=*/uint8_t(ld)); // TEMP row = ld (0..31) within that bank
-        }
-
-        // 2) temp read back (CPU load temp)
-        std::array<std::array<uint8_t, ROW_BYTES>, DIMS> tempRows{};
-        for (int d = 0; d < DIMS; ++d) {
-            uint8_t bank = dim_bank(d);
-            int ld       = dim_local(d);
-            cim.copy_temp_to_cpu(tempRows[d].data(), bank, uint16_t(ld), ROW_BYTES);
-        }
-
-        // 3) reconstruct mask + popcount
-        for (int m = 0; m < NUM_MAP; ++m) {
-            uint64_t mask = 0;
-            for (int d = 0; d < DIMS; ++d) {
-                if (get_bit(tempRows[d].data(), m))
-                    mask |= (1ull << d);
-            }
-            masks_out[qi][m]  = mask;
-            scores_out[qi][m] = static_cast<uint8_t>(__builtin_popcountll(mask));
         }
     }
 
     m5_work_end(0, 0);
     m5_dump_stats(0, 0);
-    // ============ ROI END ============
 
-    // ============ (ROI 外) correctness check + print ============
-    bool all_ok = true;
-    for (int qi = 0; qi < NUM_QUERY; ++qi) {
-        for (int m = 0; m < NUM_MAP; ++m) {
-            uint64_t g = golden_mask(maps[m], queries[qi]);
-            if (masks_out[qi][m] != g) {
-                all_ok = false;
-                std::cout << "[FAIL] q=" << qi << " map=" << m
-                          << " mask=0x"   << std::hex << masks_out[qi][m]
-                          << " golden=0x" << g << std::dec
-                          << " pop="  << int(scores_out[qi][m])
-                          << " gpop=" << __builtin_popcountll(g)
-                          << "\n";
-                break;
+    bool ok = true;
+    uint64_t total = 0;
+    uint64_t failed = 0;
+
+    for (uint16_t bank = 0; bank < banks; bank++) {
+        for (uint16_t mat = 0; mat < mats; mat++) {
+            for (uint16_t array = 0; array < arrays; array++) {
+                total++;
+
+                uint32_t seedA = (static_cast<uint32_t>(bank) << 24)
+                               ^ (static_cast<uint32_t>(mat)  << 16)
+                               ^ (static_cast<uint32_t>(array) << 8)
+                               ^ 0xA5u;
+                uint32_t seedB = seedA ^ 0x5Au;
+
+                fill_pattern(a.data(), a.size(), seedA);
+                fill_pattern(b.data(), b.size(), seedB);
+
+                ref_and(exp.data(), a.data(), b.data(), ROW_BYTES);
+                cim.copy_temp_to_cpu(got.data(), bank, mat, array, DEST_AND, ROW_BYTES);
+                size_t bad_i = 0;
+                if (!equal_buf(got.data(), exp.data(), ROW_BYTES, bad_i)) {
+                    ok = false;
+                    failed++;
+                    dump_mismatch("AND", bank, mat, array, got.data(), exp.data(), ROW_BYTES);
+                    goto done_check;
+                }
+
+                ref_or(exp.data(), a.data(), b.data(), ROW_BYTES);
+                cim.copy_temp_to_cpu(got.data(), bank, mat, array, DEST_OR, ROW_BYTES);
+                if (!equal_buf(got.data(), exp.data(), ROW_BYTES, bad_i)) {
+                    ok = false;
+                    failed++;
+                    dump_mismatch("OR", bank, mat, array, got.data(), exp.data(), ROW_BYTES);
+                    goto done_check;
+                }
+
+                ref_xor(exp.data(), a.data(), b.data(), ROW_BYTES);
+                cim.copy_temp_to_cpu(got.data(), bank, mat, array, DEST_XOR, ROW_BYTES);
+                if (!equal_buf(got.data(), exp.data(), ROW_BYTES, bad_i)) {
+                    ok = false;
+                    failed++;
+                    dump_mismatch("XOR", bank, mat, array, got.data(), exp.data(), ROW_BYTES);
+                    goto done_check;
+                }
             }
         }
-        std::cout << "[Query " << qi << "] " << (all_ok ? "PASS" : "FAIL") << "\n";
-        if (!all_ok) break;
     }
 
-    std::cout << (all_ok ? "\nALL PASS ✅\n" : "\nTEST FAIL ❌\n");
-    return all_ok ? 0 : 1;
+done_check:
+    std::cout << (ok ? "ALL PASS\n" : "TEST FAIL\n");
+    std::cout << "checked arrays = " << total
+              << " failed = " << failed << "\n";
+    return ok ? 0 : 1;
 }

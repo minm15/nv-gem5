@@ -92,8 +92,10 @@ try:
     system.mem_ctrl.dram.cim_handler_list = [CimHandler()]
     for cim in system.mem_ctrl.dram.cim_handler_list:
         cim.num_column_bits = 6
-        cim.num_bank_bits   = 5
-        cim.num_row_bits    = 8 
+        cim.num_bank_bits   = 3
+        cim.num_mat_bits    = 4
+        cim.num_array_bits  = 4
+        cim.num_row_bits    = 9
 
         cim.cim_operation_handler = CimOperationInterface()
 
@@ -130,8 +132,8 @@ system.cpu.createInterruptController()
 binary = "./tests/test-progs/lab/bin/hello64-static"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
 
-EndAddress = 0x16000000
-SimpleOpts.add_option("--EndAddress", type=str, default="0x16000000")
+EndAddress = 0x19000000
+SimpleOpts.add_option("--EndAddress", type=str, default="0x19000000")
 
 process = Process()
 process.cmd = [binary]
@@ -146,12 +148,12 @@ m5.instantiate()
 process.map(vaddr=Addr(0x10000000), paddr=Addr(0x10000000),
             size=0x04000000, cacheable=True)
 
-# temp buffer (resultTemporaryBufferAddress)
+# temp buffer (resultTemporaryBufferAddress) 64MiB: [0x14000000, 0x18000000)
 process.map(vaddr=Addr(0x14000000), paddr=Addr(0x14000000),
-            size=0x80000, cacheable=False)
+            size=0x04000000, cacheable=False)
 
-# cmd/mmio
-process.map(vaddr=Addr(0x15000000), paddr=Addr(0x15000000),
+# cmd/mmio (commandWriteAddress) at 0x18000000
+process.map(vaddr=Addr(0x18000000), paddr=Addr(0x18000000),
             size=0x1000, cacheable=False)
 
 print("Beginning simulation!")
