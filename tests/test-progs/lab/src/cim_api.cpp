@@ -5,8 +5,10 @@
 static constexpr uint64_t kAllOnes64 = 0xffffffffffffffffull;
 
 CimModule::CimModule(volatile uint64_t *const read_write_address,
+                     volatile uint64_t *const temp_address,
                      volatile uint64_t *const command_address)
     : readWriteAddress(read_write_address),
+      tempAddress(temp_address),
       commandWriteAddress(command_address),
       bankBits(0),
       columnBits(0)
@@ -225,6 +227,26 @@ void CimModule::copy_to_cpu(void *cpu_array,
     assert(size_in_byte == (1ull << columnBits));
 
     const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
+    const uintptr_t offs =
+        (static_cast<uintptr_t>(row)  << (bankBits + columnBits)) +
+        (static_cast<uintptr_t>(bank) <<  columnBits);
+
+    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+    std::memcpy(cpu_array, src, size_in_byte);
+}
+
+void CimModule::copy_temp_to_cpu(void *cpu_array,
+                                 uint8_t bank,
+                                 uint16_t row,
+                                 size_t size_in_byte)
+{
+    checkGeometryReady();
+    assert(cpu_array != nullptr);
+    assert(tempAddress != nullptr);
+    assert(bank < (1u << bankBits));
+    assert(size_in_byte == (1ull << columnBits));
+
+    const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
     const uintptr_t offs =
         (static_cast<uintptr_t>(row)  << (bankBits + columnBits)) +
         (static_cast<uintptr_t>(bank) <<  columnBits);

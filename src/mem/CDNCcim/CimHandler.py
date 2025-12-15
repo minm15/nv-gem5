@@ -12,12 +12,12 @@ class CimHandler(SimObject):
         Addr(0x10000000), "Physical address of the CIM operation region"
     )
     result_temporary_buffer_address = Param.Addr(
-        Addr(0x11000000),
+        Addr(0x14000000),
         """Physical address of The temporary buffer region.
         CPU must not read/write to/from this region!!!""",
     )
     command_write_address = Param.Addr(
-        Addr(0x12000000), "Physical address of The command opcode"
+        Addr(0x15000000), "Physical address of The command opcode"
     )
     # ============== Address Decoder:
     # <-0x10?????? >

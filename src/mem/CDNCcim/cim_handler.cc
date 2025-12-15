@@ -28,6 +28,8 @@ CimHandler::CimHandler(const CimHandlerParams &params)
       cimOperationHandler(params.cim_operation_handler)
 {
     DPRINTF(CIMDBG, "CimHandler Constructed! this_ptr: %p\n", this);
+    DPRINTF(CIMDBG, "readWrite=0x%lx temp=0x%lx cmd=0x%lx\n",
+        readWriteAddress, resultTemporaryBufferAddress, commandWriteAddress);
     assert(numOperationTypes == operationsInitLatency.size());
     assert(numOperationTypes == operationsOnWordLatency.size());
     // for (auto t : operationsOnWordLatency) {
@@ -151,10 +153,10 @@ CimHandler::cimExecuteCommand(
         __LINE__);
     command.print();
 
-    printf("[CIM] Execute command type=%u dest=%u bank_mask=0x%016llx col_mask=0x%016llx\n",
-       command.operation_type, command.dest,
-       (unsigned long long)command.bank_mask,
-       (unsigned long long)command.column_mask);
+    // printf("[CIM] Execute command type=%u dest=%u bank_mask=0x%016llx col_mask=0x%016llx\n",
+    //    command.operation_type, command.dest,
+    //    (unsigned long long)command.bank_mask,
+    //    (unsigned long long)command.column_mask);
 
     for (size_t bank = 0; bank < (1ull << numBankBits); bank++) {
         if (command.bank_mask & (1ull << bank)) {
@@ -195,7 +197,7 @@ CimHandler::cimExecuteCommand(
                                         abstract_mem, readWriteAddress, row, bank, column);
                                     rows.push_back(src_ptr);
 
-                                    printf("[CIM OR] src row=%u bank=%lu col=%lu addr=%p\n", row, bank, column, src_ptr);
+                                    // printf("[CIM OR] src row=%u bank=%lu col=%lu addr=%p\n", row, bank, column, src_ptr);
                                 }                
                             }
 

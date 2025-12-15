@@ -17,7 +17,8 @@ CXXFLAGS := -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DinCIM=1 -DSTD_PRINT_OUTPUT
 LDFLAGS  := -static
 LDLIBS   := $(M5_LIB_CONT)
 
-COMPILEFILE := src/desc_test.cpp
+# COMPILEFILE := src/desc_test.cpp
+COMPILEFILE := src/desc_on_cim.cpp
 
 .PHONY: all clean m5lib
 

@@ -130,8 +130,8 @@ system.cpu.createInterruptController()
 binary = "./tests/test-progs/lab/bin/hello64-static"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
 
-EndAddress = 0x12000018
-SimpleOpts.add_option("--EndAddress", type=str, default="0x12000018")
+EndAddress = 0x16000000
+SimpleOpts.add_option("--EndAddress", type=str, default="0x16000000")
 
 process = Process()
 process.cmd = [binary]
@@ -142,12 +142,16 @@ system.cpu.createThreads()
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# data: [0x10000000, 0x12000000)  -> size = 0x2000000
+# NVM array (readWriteAddress) 64MiB: [0x10000000, 0x14000000)
 process.map(vaddr=Addr(0x10000000), paddr=Addr(0x10000000),
-            size=0x2000000, cacheable=True)
+            size=0x04000000, cacheable=True)
 
-# cmd/mmio: [0x12000000, 0x12001000)
-process.map(vaddr=Addr(0x12000000), paddr=Addr(0x12000000),
+# temp buffer (resultTemporaryBufferAddress)
+process.map(vaddr=Addr(0x14000000), paddr=Addr(0x14000000),
+            size=0x80000, cacheable=False)
+
+# cmd/mmio
+process.map(vaddr=Addr(0x15000000), paddr=Addr(0x15000000),
             size=0x1000, cacheable=False)
 
 print("Beginning simulation!")

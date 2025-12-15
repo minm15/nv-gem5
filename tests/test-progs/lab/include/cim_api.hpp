@@ -9,13 +9,15 @@
 #include <cstdio>
 
 #define DEFAULT_READWRITE_ADDRESS ((volatile uint64_t *const)0x10000000ul)
-#define DEFAULT_COMMAND_ADDRESS   ((volatile uint64_t *const)0x12000000ul)
+#define DEFAULT_TEMP_ADDRESS      ((volatile uint64_t *const)0x14000000ul)
+#define DEFAULT_COMMAND_ADDRESS   ((volatile uint64_t *const)0x15000000ul)
 #define DEFAULT_ROW_SIZE_BYTE     (0x40u)
 
 class CimModule
 {
   protected:
     volatile uint64_t *const readWriteAddress;
+    volatile uint64_t* tempAddress;
     volatile uint64_t *const commandWriteAddress;
 
     unsigned bankBits;
@@ -62,6 +64,7 @@ class CimModule
 
     CimModule(
         volatile uint64_t *const read_write_address = DEFAULT_READWRITE_ADDRESS,
+        volatile uint64_t *const temp_address = DEFAULT_TEMP_ADDRESS,
         volatile uint64_t *const command_address = DEFAULT_COMMAND_ADDRESS);
 
     void setGeometry(unsigned num_bank_bits, unsigned num_column_bits);
@@ -115,6 +118,11 @@ class CimModule
         uint8_t bank,
         uint16_t row,
         size_t size_in_byte);
+
+    void copy_temp_to_cpu(void *cpu_array,
+                                 uint8_t bank,
+                                 uint16_t row,
+                                 size_t size_in_byte);
 };
 
 #endif // __CIM_API__HPP__
