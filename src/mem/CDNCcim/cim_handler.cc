@@ -134,7 +134,15 @@ CimHandler::cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t
     command_address[2] = 0ul;
     command_address[3] = 0ul;
 
+    DPRINTF(CIMDBG,
+    "cimFetchCommand BEFORE exec @%lu unionBusyUntil=%lu bank0Ready=%lu\n",
+    curTick(), unionBusyUntil, unitReleaseTime[0]);
+
     cimExecuteCommand(abstract_mem, command);
+
+    DPRINTF(CIMDBG,
+    "cimFetchCommand AFTER  exec @%lu unionBusyUntil=%lu bank0Ready=%lu\n",
+    curTick(), unionBusyUntil, unitReleaseTime[0]);
 }
 
 void
@@ -451,6 +459,9 @@ CimHandler::getCimLatency(const Addr &addr)
 
     DPRINTF(CIMDBG, "[%s:%s:%s] left_time: %d, for address: 0x%lx\n",
         __FILE__, __func__, __LINE__, left_time, addr);
+    DPRINTF(CIMDBG,
+        "getCimLatency @%lu addr=0x%lx bank=%u unitRelease=%lu left=%ld\n",
+        curTick(), addr, bank, unitReleaseTime[bank], left_time);
 
     if (left_time > 0)
         return left_time;

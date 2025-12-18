@@ -1,199 +1,360 @@
 #include "cim_api.hpp"
+#include <gem5/m5ops.h>
 
+#include <array>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <vector>
 
-#if __has_include(<gem5/m5ops.h>)
-  #include <gem5/m5ops.h>
-  #define HAS_M5OPS 1
-#elif __has_include(<m5ops.h>)
-  #include <m5ops.h>
-  #define HAS_M5OPS 1
+// ====== mapped in python ======
+static constexpr uintptr_t DATA_BASE = 0x10000000;
+static constexpr uintptr_t TEMP_BASE = 0x14000000;
+static constexpr uintptr_t CMD_BASE  = 0x18000000;
+
+// ====== geometry (must match CimHandler params) ======
+static constexpr unsigned BANK_BITS  = 3;  // 8 banks
+static constexpr unsigned MAT_BITS   = 4;  // 16 mats
+static constexpr unsigned ARRAY_BITS = 4;  // 16 arrays
+static constexpr unsigned ROW_BITS   = 9;  // 512 rows
+static constexpr unsigned COL_BITS   = 6;  // 64B/row
+
+static constexpr size_t ROW_BYTES = (1ull << COL_BITS); // 64B (=512 bits)
+
+// ====== workload ======
+static constexpr int NUM_MAP_LOCAL = 512; // 512 maps => 512 lanes
+static constexpr int NUM_QUERIES   = 4;   // 4 queries
+static constexpr int DIMS          = 64;  // 64 dims
+static constexpr int VALUE_BITS    = 4;   // 4-bit value per dim
+
+// Layout in RW rows (512 rows total):
+// per dim: [orig bit0..3] + [inv bit0..3] => 8 rows per dim
+static inline uint16_t orig_row(int d, int b) {
+    return static_cast<uint16_t>(d * (2 * VALUE_BITS) + b);
+}
+static inline uint16_t inv_row (int d, int b) {
+    return static_cast<uint16_t>(d * (2 * VALUE_BITS) + VALUE_BITS + b);
+}
+static_assert(DIMS * (2 * VALUE_BITS) == (1 << ROW_BITS),
+              "This config must exactly fill 512 RW rows (512x512 layout).");
+
+// TEMP destination row (in TEMP window). overwrite per-dim and read back immediately.
+static constexpr uint16_t TEMP_DEST_ROW = 0;
+
+// ====== A: tick marker (sim tick visible in gem5 debug log) ======
+static constexpr uintptr_t MARK_BASE = TEMP_BASE + 0x2000;
+static inline void tick_mark(uint64_t tag)
+{
+    auto *p = reinterpret_cast<volatile uint64_t *>(MARK_BASE);
+    p[0] = tag;
+    asm volatile("" ::: "memory");
+}
+
+// ====== measurement helpers (host time) ======
+static inline uint64_t ts_now() { return m5_rpns(); }
+
+struct ScopeTimer {
+    const char* label;
+    uint64_t t0;
+    explicit ScopeTimer(const char* l) : label(l), t0(ts_now()) {}
+    ~ScopeTimer() {
+        const uint64_t t1 = ts_now();
+        std::cout << "[MEASURE] " << label << " delta=" << (t1 - t0)
+                  << " (m5_rpns units)\n";
+    }
+};
+
+static inline void set_bit(uint8_t *row64B, int map_id, bool v)
+{
+    const int byte = map_id >> 3;
+    const int bit  = map_id & 7;
+    const uint8_t m = static_cast<uint8_t>(1u << bit);
+    if (v) row64B[byte] |= m;
+    else   row64B[byte] &= static_cast<uint8_t>(~m);
+}
+
+// ====== deterministic data generator (4-bit values) ======
+static inline uint8_t map_val(int m, int d)
+{
+    uint32_t x = static_cast<uint32_t>(m) * 1103515245u
+               + static_cast<uint32_t>(d) * 12345u
+               + 0x9e3779b9u;
+    x ^= (x >> 16);
+    return static_cast<uint8_t>(x & 0xFu);
+}
+
+static inline uint8_t query_val(int qi, int d)
+{
+    uint32_t x = static_cast<uint32_t>(qi) * 0x13579bdu
+               + static_cast<uint32_t>(d) * 0x2468aceu
+               + 0x7u;
+    x ^= (x >> 13);
+    return static_cast<uint8_t>(x & 0xFu);
+}
+
+// ====== CPU bit-sliced ripple-carry counter + argmin-on-planes ======
+static constexpr int LANES_WORDS = 8; // 8 * 64 = 512
+
+static inline void load_mask_u64(const uint8_t* mask64B, uint64_t out[LANES_WORDS])
+{
+    std::memcpy(out, mask64B, 64);
+}
+
+// K = ceil(log2(DIMS+1)) ; DIMS=64 => 7 bits (0..64)
+static constexpr int COUNTER_BITS =
+    (DIMS + 1 <= 2)   ? 1 :
+    (DIMS + 1 <= 4)   ? 2 :
+    (DIMS + 1 <= 8)   ? 3 :
+    (DIMS + 1 <= 16)  ? 4 :
+    (DIMS + 1 <= 32)  ? 5 :
+    (DIMS + 1 <= 64)  ? 6 :
+    (DIMS + 1 <= 128) ? 7 : 8;
+
+using Planes = std::array<std::array<uint64_t, LANES_WORDS>, COUNTER_BITS>;
+
+static inline void planes_zero(Planes& p)
+{
+    for (int k = 0; k < COUNTER_BITS; ++k)
+        for (int w = 0; w < LANES_WORDS; ++w)
+            p[k][w] = 0;
+}
+
+static inline void planes_add_mask(Planes& p, const uint64_t mask_words[LANES_WORDS])
+{
+    uint64_t carry[LANES_WORDS];
+    for (int w = 0; w < LANES_WORDS; ++w) carry[w] = mask_words[w];
+
+    for (int k = 0; k < COUNTER_BITS; ++k) {
+        for (int w = 0; w < LANES_WORDS; ++w) {
+            const uint64_t a = p[k][w];
+            const uint64_t c = carry[w];
+            p[k][w] = a ^ c;
+            carry[w] = a & c;
+        }
+        uint64_t acc = 0;
+        for (int w = 0; w < LANES_WORDS; ++w) acc |= carry[w];
+        if (acc == 0) break;
+    }
+}
+
+static inline bool words_any_nonzero(const uint64_t w[LANES_WORDS])
+{
+    uint64_t acc = 0;
+    for (int i = 0; i < LANES_WORDS; ++i) acc |= w[i];
+    return acc != 0;
+}
+
+static inline int ctz64(uint64_t x)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_ctzll(x);
 #else
-  #define HAS_M5OPS 0
+    int n = 0;
+    while ((x & 1ull) == 0ull) { x >>= 1; ++n; }
+    return n;
 #endif
-
-using namespace std;
-
-static constexpr uint8_t  BYTEMASK_ALL = 0xFFu;
-static constexpr uint64_t COLMASK_ALL  = 0xFFFFFFFFFFFFFFFFull;
-
-// Your current gem5 config:
-// banks_per_rank = 32  => bank bits = 5
-// num_column_bits = 6  => 64B stride per bank
-static constexpr unsigned NUM_BANK_BITS   = 5;
-static constexpr unsigned NUM_COLUMN_BITS = 6;
-
-static bool check_equal(const uint8_t *a, const uint8_t *b, size_t n)
-{
-    return std::memcmp(a, b, n) == 0;
 }
 
-static void dump_bytes(const char *name, const uint8_t *got,
-                       const uint8_t *exp, size_t n = 16)
+static inline int planes_argmin_lane(const Planes& p)
 {
-    std::cout << name << " (got vs expected):\n  ";
-    for (size_t i = 0; i < n; ++i) {
-        std::cout << std::hex << std::uppercase << "0x"
-                  << (int)got[i] << " ";
+    uint64_t cand[LANES_WORDS];
+    for (int w = 0; w < LANES_WORDS; ++w) cand[w] = ~0ull;
+
+    for (int k = COUNTER_BITS - 1; k >= 0; --k) {
+        uint64_t zeros[LANES_WORDS];
+        for (int w = 0; w < LANES_WORDS; ++w) {
+            zeros[w] = cand[w] & ~p[k][w];
+        }
+        if (words_any_nonzero(zeros)) {
+            for (int w = 0; w < LANES_WORDS; ++w) cand[w] = zeros[w];
+        } else {
+            for (int w = 0; w < LANES_WORDS; ++w) cand[w] = cand[w] & p[k][w];
+        }
     }
-    std::cout << "\n  ";
-    for (size_t i = 0; i < n; ++i) {
-        std::cout << std::hex << std::uppercase << "0x"
-                  << (int)exp[i] << " ";
+
+    for (int w = 0; w < LANES_WORDS; ++w) {
+        uint64_t x = cand[w];
+        if (x) return w * 64 + ctz64(x);
     }
-    std::cout << std::dec << "\n";
+    return -1;
 }
 
-// Simple deterministic PRNG for better test patterns
-static inline uint32_t xorshift32(uint32_t &s)
+static inline uint32_t planes_get_lane_value(const Planes& p, int lane)
 {
-    s ^= s << 13;
-    s ^= s >> 17;
-    s ^= s << 5;
-    return s;
+    const int w = lane >> 6;
+    const int b = lane & 63;
+    uint32_t v = 0;
+    for (int k = 0; k < COUNTER_BITS; ++k) {
+        v |= static_cast<uint32_t>(((p[k][w] >> b) & 1ull) << k);
+    }
+    return v;
+}
+
+// ====== golden (CPU brute) ======
+static inline uint32_t golden_mismatch_count(int m, const std::array<uint8_t, DIMS>& q)
+{
+    uint32_t mis = 0;
+    for (int d = 0; d < DIMS; ++d) {
+        const uint8_t mv = map_val(m, d) & 0xFu;
+        const uint8_t qv = q[d] & 0xFu;
+        if (mv != qv) ++mis;
+    }
+    return mis;
 }
 
 int main()
 {
-    constexpr size_t ROW_BYTES = DEFAULT_ROW_SIZE_BYTE;
+    auto *rw  = reinterpret_cast<volatile uint64_t *>(DATA_BASE);
+    auto *tmp = reinterpret_cast<volatile uint64_t *>(TEMP_BASE);
+    auto *cmd = reinterpret_cast<volatile uint64_t *>(CMD_BASE);
 
-    uint8_t rowA[ROW_BYTES];
-    uint8_t rowB[ROW_BYTES];
-    uint8_t exp_or[ROW_BYTES];
-    uint8_t exp_and[ROW_BYTES];
-    uint8_t exp_xor[ROW_BYTES];
+    CimModule cim(rw, tmp, cmd);
+    cim.setGeometry(BANK_BITS, MAT_BITS, ARRAY_BITS, ROW_BITS, COL_BITS);
 
-    // Use non-tricky, non-complementary, deterministic patterns
-    for (size_t i = 0; i < ROW_BYTES; ++i) {
-        uint32_t sa = 0x12345678u ^ (uint32_t)i;
-        uint32_t sb = 0x9E3779B9u ^ (uint32_t)(i * 17u + 3u);
+    constexpr uint16_t TEST_BANK  = 0;
+    constexpr uint16_t TEST_MAT   = 0;
+    constexpr uint16_t TEST_ARRAY = 0;
 
-        uint8_t a = (uint8_t)(xorshift32(sa) & 0xFFu);
-        uint8_t b = (uint8_t)(xorshift32(sb) & 0xFFu);
-
-        rowA[i] = a;
-        rowB[i] = b;
-
-        exp_or[i]  = (uint8_t)(a | b);
-        exp_and[i] = (uint8_t)(a & b);
-        exp_xor[i] = (uint8_t)(a ^ b);
+    // ---- Build queries ----
+    std::array<std::array<uint8_t, DIMS>, NUM_QUERIES> queries{};
+    for (int qi = 0; qi < NUM_QUERIES; ++qi) {
+        for (int d = 0; d < DIMS; ++d) {
+            queries[qi][d] = query_val(qi, d) & 0xFu;
+        }
     }
 
-    const uint16_t ROW_A   = 0;
-    const uint16_t ROW_B   = 1;
-    const uint16_t ROW_OR  = 2;
-    const uint16_t ROW_AND = 3;
-    const uint16_t ROW_XOR = 4;
+    // ---- Fill RW rows ----
+    alignas(64) std::array<uint8_t, ROW_BYTES> row_o{};
+    alignas(64) std::array<uint8_t, ROW_BYTES> row_i{};
 
-    const uint8_t BANK0 = 0;
+    std::cout << "Filling RW (bank0, mat0, array0, 512 rows total) ...\n";
 
-    CimModule cim;
+    for (int d = 0; d < DIMS; ++d) {
+        for (int b = 0; b < VALUE_BITS; ++b) {
+            row_o.fill(0);
+            row_i.fill(0);
 
-    // Set geometry once for the module
-    cim.setGeometry(NUM_BANK_BITS, NUM_COLUMN_BITS);
+            for (int m = 0; m < NUM_MAP_LOCAL; ++m) {
+                const uint8_t v = map_val(m, d) & 0xFu;
+                const bool bit = ((v >> b) & 1u) != 0u;
+                set_bit(row_o.data(), m, bit);
+                set_bit(row_i.data(), m, !bit);
+            }
 
-    const uint64_t BANKMASK_B0 = CimModule::Mask::bank(BANK0);
+            cim.copy_to_cim(TEST_BANK, TEST_MAT, TEST_ARRAY, orig_row(d, b),
+                            row_o.data(), ROW_BYTES);
+            cim.copy_to_cim(TEST_BANK, TEST_MAT, TEST_ARRAY, inv_row(d, b),
+                            row_i.data(), ROW_BYTES);
+        }
+    }
 
-    uint8_t zeros[ROW_BYTES];
-    std::memset(zeros, 0, ROW_BYTES);
+    // ============================================================
+    // ROI: from queries -> 4*64*(build rows + cim.OR + read mask + ripple add) + argmin
+    // ============================================================
+    alignas(64) std::array<uint8_t, ROW_BYTES> tempRow{};
+    std::vector<uint16_t> rows;
+    rows.reserve(VALUE_BITS);
 
-    // =========================
-    // Offline preload (不計時)
-    // =========================
+    volatile uint64_t sink = 0;
+    std::array<int, NUM_QUERIES> best_lane{};
+    std::array<uint32_t, NUM_QUERIES> best_mismatch{};
 
-    // Clear rows in bank0
-    cim.copy_to_cim(BANK0, ROW_A,   zeros, ROW_BYTES);
-    cim.copy_to_cim(BANK0, ROW_B,   zeros, ROW_BYTES);
-    cim.copy_to_cim(BANK0, ROW_OR,  zeros, ROW_BYTES);
-    cim.copy_to_cim(BANK0, ROW_AND, zeros, ROW_BYTES);
-    cim.copy_to_cim(BANK0, ROW_XOR, zeros, ROW_BYTES);
+    std::cout << "\n[ROI] begin (query -> CIM OR/read -> ripple -> argmin)\n";
+    tick_mark(0xC0000000ull);
 
-    // Write A/B into bank0
-    cim.copy_to_cim(BANK0, ROW_A, rowA, ROW_BYTES);
-    cim.copy_to_cim(BANK0, ROW_B, rowB, ROW_BYTES);
-
-    // =========================
-    // ROI begins: bitwise + readback
-    // =========================
-#if HAS_M5OPS
+    m5_reset_stats(0, 0);
     m5_work_begin(0, 0);
-#endif
 
-    // OR: result -> buffer(0x100|ROW_OR), then COPY back to ROW_OR
-    cim.OR({(uint8_t)ROW_A, (uint8_t)ROW_B}, BYTEMASK_ALL, BANKMASK_B0, COLMASK_ALL, (uint8_t)ROW_OR);
-    cim.COPY(
-        (uint16_t)ROW_OR,
-        (uint16_t)(0x100u | ROW_OR),
-        0,
-        BYTEMASK_ALL,
-        BANKMASK_B0,
-        COLMASK_ALL
-    );
+    {
+        ScopeTimer t_all("ROI total: 4*64*(rows+OR+read+ripple) + argmin");
 
-    // AND: result -> buffer(0x100|ROW_AND), then COPY back to ROW_AND
-    cim.AND({(uint8_t)ROW_A, (uint8_t)ROW_B}, BYTEMASK_ALL, BANKMASK_B0, COLMASK_ALL, (uint8_t)ROW_AND);
-    cim.COPY(
-        (uint16_t)ROW_AND,
-        (uint16_t)(0x100u | ROW_AND),
-        0,
-        BYTEMASK_ALL,
-        BANKMASK_B0,
-        COLMASK_ALL
-    );
+        for (int qi = 0; qi < NUM_QUERIES; ++qi) {
+            ScopeTimer t_q("  per-query: 64*(rows+OR+read+ripple) + argmin");
 
-    // XOR: result -> buffer(0x100|ROW_XOR), then COPY back to ROW_XOR
-    cim.XOR({(uint8_t)ROW_A, (uint8_t)ROW_B}, BYTEMASK_ALL, BANKMASK_B0, COLMASK_ALL, (uint8_t)ROW_XOR);
-    cim.COPY(
-        (uint16_t)ROW_XOR,
-        (uint16_t)(0x100u | ROW_XOR),
-        0,
-        BYTEMASK_ALL,
-        BANKMASK_B0,
-        COLMASK_ALL
-    );
+            Planes planes{};
+            planes_zero(planes);
 
-    uint8_t got_or[ROW_BYTES];
-    uint8_t got_and[ROW_BYTES];
-    uint8_t got_xor[ROW_BYTES];
+            for (int d = 0; d < DIMS; ++d) {
+                // ---- build rows for this dim based on query bits ----
+                rows.clear();
+                const uint8_t qv = queries[qi][d] & 0xFu;
+                for (int b = 0; b < VALUE_BITS; ++b) {
+                    const int qbit = (qv >> b) & 1u;
+                    rows.push_back(static_cast<uint16_t>(qbit ? inv_row(d, b)
+                                                             : orig_row(d, b)));
+                }
 
-    std::memset(got_or,  0, ROW_BYTES);
-    std::memset(got_and, 0, ROW_BYTES);
-    std::memset(got_xor, 0, ROW_BYTES);
+                // ---- CIM OR -> TEMP row ----
+                cim.OR(rows,
+                       /*byte_mask=*/0xffu,
+                       /*bank_mask=*/CimModule::Mask::bank(TEST_BANK),
+                       /*column_mask=*/CimModule::Mask::colsAll(),
+                       /*dest=*/TEMP_DEST_ROW,
+                       /*mat_mask=*/CimModule::Mask::mat(TEST_MAT),
+                       /*array_mask=*/CimModule::Mask::array(TEST_ARRAY));
 
-    cim.copy_to_cpu(got_or,  BANK0, ROW_OR,  ROW_BYTES);
-    cim.copy_to_cpu(got_and, BANK0, ROW_AND, ROW_BYTES);
-    cim.copy_to_cpu(got_xor, BANK0, ROW_XOR, ROW_BYTES);
+                // ---- read back mismatch mask ----
+                cim.copy_temp_to_cpu(tempRow.data(),
+                                     TEST_BANK, TEST_MAT, TEST_ARRAY,
+                                     TEMP_DEST_ROW,
+                                     ROW_BYTES);
 
-#if HAS_M5OPS
+                // ---- ripple add into bit-sliced counter ----
+                uint64_t mask_words[LANES_WORDS];
+                load_mask_u64(tempRow.data(), mask_words);
+                planes_add_mask(planes, mask_words);
+            }
+
+            // ---- argmin on planes ----
+            const int lane = planes_argmin_lane(planes);
+            const uint32_t mis = planes_get_lane_value(planes, lane);
+
+            best_lane[qi] = lane;
+            best_mismatch[qi] = mis;
+
+            sink += static_cast<uint64_t>(lane);
+            sink += static_cast<uint64_t>(mis);
+
+            std::cout << "[RESULT] qi=" << qi
+                      << " best_lane=" << lane
+                      << " best_mismatch=" << mis
+                      << " best_match=" << (DIMS - mis)
+                      << "\n";
+        }
+    }
+
     m5_work_end(0, 0);
-#endif
-    // =========================
-    // ROI ends
-    // =========================
+    m5_dump_stats(0, 0);
 
-    bool ok_or  = check_equal(got_or,  exp_or,  ROW_BYTES);
-    bool ok_and = check_equal(got_and, exp_and, ROW_BYTES);
-    bool ok_xor = check_equal(got_xor, exp_xor, ROW_BYTES);
+    tick_mark(0xC0000001ull);
+    std::cout << "[DBG] sink=" << (uint64_t)sink << "\n";
+    std::cout << "[ROI] end\n\n";
 
-    std::cout << "CIM bitwise test (OR/AND/XOR) [bank0 only]:\n";
-    std::cout << "  OR (A|B)   : " << (ok_or  ? "PASS" : "FAIL") << "\n";
-    std::cout << "  AND(A&B)   : " << (ok_and ? "PASS" : "FAIL") << "\n";
-    std::cout << "  XOR(A^B)   : " << (ok_xor ? "PASS" : "FAIL") << "\n";
+    // ===== ROI OUT: golden check =====
+    std::cout << "Golden compare (excluded from ROI) ...\n";
+    for (int qi = 0; qi < NUM_QUERIES; ++qi) {
+        uint32_t best_mis = 0xffffffffu;
+        int best_m = -1;
 
-    // === Always print got vs expected ===
-    static constexpr size_t PRINT_N = 64; 
-    std::cout << "\n[Dump first " << PRINT_N << " bytes] (got vs expected)\n";
-    dump_bytes("OR ",  got_or,  exp_or,  PRINT_N);
-    dump_bytes("AND",  got_and, exp_and, PRINT_N);
-    dump_bytes("XOR",  got_xor, exp_xor, PRINT_N);
+        for (int m = 0; m < NUM_MAP_LOCAL; ++m) {
+            const uint32_t mis = golden_mismatch_count(m, queries[qi]);
+            if (mis < best_mis) {
+                best_mis = mis;
+                best_m = m;
+            }
+        }
 
-    // (Optional) extra hints
-    if (!ok_or)  std::cout << "  NOTE: OR mismatch detected.\n";
-    if (!ok_and) std::cout << "  NOTE: AND mismatch detected.\n";
-    if (!ok_xor) std::cout << "  NOTE: XOR mismatch detected.\n";
+        if (best_mismatch[qi] != best_mis || best_lane[qi] != best_m) {
+            std::cout << "[FAIL]\n"
+                      << "  qi=" << qi
+                      << " got(best_lane=" << best_lane[qi]
+                      << ", best_mismatch=" << best_mismatch[qi] << ")\n"
+                      << "  exp(best_lane=" << best_m
+                      << ", best_mismatch=" << best_mis << ")\n";
+            return 1;
+        }
+    }
 
-    return (ok_or && ok_and && ok_xor) ? 0 : 1;
+    std::cout << "ALL PASS (ROI measures only CPU ripple+argmin)\n";
+    return 0;
 }

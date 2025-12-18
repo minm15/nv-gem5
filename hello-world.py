@@ -6,7 +6,7 @@ from m5.objects import Cache
 # --- System ---
 system = System()
 system.clk_domain = SrcClockDomain()
-system.clk_domain.clock = '3GHz'
+system.clk_domain.clock = '2.2GHz'
 system.clk_domain.voltage_domain = VoltageDomain()
 
 # timing
@@ -99,22 +99,11 @@ try:
 
         cim.cim_operation_handler = CimOperationInterface()
 
-        # tick  16284172194
-        # ROI.  16278616755
-        # cache 344133189
-        # cim.operations_init_latency = [
-        #     "2.821ns", "2.821ns", "2.821ns", "2.821ns", "6.56ns",
-        # ]
-        # cim.operations_on_word_latency = [
-        #     "2.821ns", "2.821ns", "2.821ns", "2.821ns", "6.56ns",
-        # ]
-        # tick 16284387978
-        # cache 344366955
         cim.operations_init_latency = [
-            "20.821ns", "20.821ns", "20.821ns", "20.821ns", "60.56ns",
+            "5.565ns", "5.565ns", "5.565ns", "5.565ns", "5.565ns",
         ]
         cim.operations_on_word_latency = [
-            "20.821ns", "20.821ns", "20.821ns", "20.821ns", "60.56ns",
+            "5.565ns", "5.565ns", "5.565ns", "5.565ns", "5.565ns",
         ]
         # cim.operations_init_latency = [
         #     "2200000.821ns", "2200000.821ns", "2200000.821ns", "2200000.821ns", "2200000.56ns",
@@ -124,7 +113,7 @@ try:
         # ]
 except Exception as e:
     print("WARNING: CIM not enabled or SimObjects not found:", e) 
-
+# 53936084592
 # IRQs
 system.cpu.createInterruptController()
 
@@ -146,7 +135,7 @@ m5.instantiate()
 
 # NVM array (readWriteAddress) 64MiB: [0x10000000, 0x14000000)
 process.map(vaddr=Addr(0x10000000), paddr=Addr(0x10000000),
-            size=0x04000000, cacheable=True)
+            size=0x04000000, cacheable=False)
 
 # temp buffer (resultTemporaryBufferAddress) 64MiB: [0x14000000, 0x18000000)
 process.map(vaddr=Addr(0x14000000), paddr=Addr(0x14000000),
