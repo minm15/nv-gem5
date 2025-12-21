@@ -44,7 +44,45 @@ class CimHandler(SimObject):
         ],
         "Time used for each 8-byte word to be read and processed",
     )
-
+    
+    """
+    NVSim parameter
+    Timing:
+    -  Read Latency = 4.432ns
+    |--- H-Tree Latency = 257.820ps
+    |--- Mat Latency    = 4.174ns
+        |--- Predecoder Latency = 195.646ps
+        |--- Subarray Latency   = 3.979ns
+            |--- Row Decoder Latency = 270.473ps
+            |--- Bitline Latency     = 38.481ps
+            |--- Senseamp Latency    = 3.000ns
+            |--- Mux Latency         = 9.758ps
+            |--- Precharge Latency   = 277.810ps
+            |--- Subaddon component Latency = 660.000ps
+        |--- Mataddon component Latency   = 0.000ps
+    """
+    # H tree
+    operations_on_H_tree_latency = VectorParam.Latency(
+        [ "10ns", "10ns", "10ns", "10ns", "10ns", ],
+        "Time used for each 8-byte word to be read and processed",
+    )
+    # Predecoder
+    operations_on_Predecoder_latency = VectorParam.Latency(
+        [ "10ns", "10ns", "10ns", "10ns", "10ns", ],
+        "Time used for each 8-byte word to be read and processed",
+    )
+    # Row Decoder
+    operations_on_Row_decoder_latency = VectorParam.Latency(
+        [ "10ns", "10ns", "10ns", "10ns", "10ns", ],
+        "Time used for each 8-byte word to be read and processed",
+    )
+    # Column: Bitline + Senseamp + Mux + Precharge + Subaddon
+    operations_on_Column_latency = VectorParam.Latency(
+        [ "10ns", "10ns", "10ns", "10ns", "10ns", ],
+        "Time used for each 8-byte word to be read and processed",
+    )
+    
+    
     cim_operation_handler = Param.CimOperationInterface(
         "Operations are defined in this interface object",
     )

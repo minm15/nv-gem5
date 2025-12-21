@@ -375,7 +375,17 @@ MemCtrl::addToReadQueue(PacketPtr pkt,
 
     // If all packets are serviced by write queue, we send the repsonse back
     if (pktsServicedByWrQ == pkt_count) {
-        accessAndRespond(pkt, frontendLatency, mem_intr);
+        Tick extra = 0;
+        #ifdef CDNCcimFlag
+        {
+            const Addr a = pkt->getAddr();
+            if (auto *cim = mem_intr->getCimHandlerPtr(a)) {
+                extra = cim->getCimLatency(a);
+            }
+        }
+        #endif
+        accessAndRespond(pkt, frontendLatency + extra, mem_intr);
+        // accessAndRespond(pkt, frontendLatency, mem_intr);
         return true;
     }
 
@@ -617,18 +627,8 @@ MemCtrl::processRespondEvent(MemInterface* mem_intr,
             #ifdef CDNCcimFlag
             {
                 const Addr a = mem_pkt->pkt->getAddr();
-                auto *cim = mem_intr->getCimHandlerPtr(a);
-                if (cim) {
-                    inform("[CIMDBG][HIT] tick=%lu addr=%#lx cmd=%s size=%u\n",
-                        curTick(), a, mem_pkt->pkt->cmdString(), mem_pkt->pkt->getSize());
-
-                    inform("[CIMDBG][HIT] bases: rw=%#lx tmp=%#lx cmd=%#lx\n",
-                        cim->getReadWriteAddress(),
-                        cim->getResultTemporaryBufferAddress(),
-                        cim->getCommandWriteAddress());
-                    extra = cim->scheduleCmdAndGetExtraDelay(mem_pkt->pkt);
-                    inform("[CIMDBG][HIT] scheduleCmdAndGetExtraDelay() -> extra=%lu ticks\n",
-                        extra);
+                if (auto *cim = mem_intr->getCimHandlerPtr(a)) {
+                    extra = cim->getCimLatency(a); 
                 }
             }
             #endif
@@ -646,9 +646,8 @@ MemCtrl::processRespondEvent(MemInterface* mem_intr,
         #ifdef CDNCcimFlag
         {
             const Addr a = mem_pkt->pkt->getAddr();
-            auto *cim = mem_intr->getCimHandlerPtr(a);
-            if (cim) {
-                extra = cim->scheduleCmdAndGetExtraDelay(mem_pkt->pkt);
+            if (auto *cim = mem_intr->getCimHandlerPtr(a)) {
+                extra = cim->getCimLatency(a);  
             }
         }
         #endif

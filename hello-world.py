@@ -2,6 +2,8 @@ import m5
 from m5.objects import *
 from configs.common import SimpleOpts
 from m5.objects import Cache
+from m5.objects import DerivO3CPU
+
 
 # --- System ---
 system = System()
@@ -14,7 +16,7 @@ system.mem_mode = 'timing'
 system.mem_ranges = [AddrRange('1GiB')]
 
 # CPU TimingSimpleCPU
-system.cpu = TimingSimpleCPU()
+system.cpu = DerivO3CPU()
 
 # Bus
 system.membus = SystemXBar()
@@ -99,18 +101,29 @@ try:
 
         cim.cim_operation_handler = CimOperationInterface()
 
-        cim.operations_init_latency = [
-            "5.565ns", "5.565ns", "5.565ns", "5.565ns", "5.565ns",
-        ]
-        cim.operations_on_word_latency = [
-            "5.565ns", "5.565ns", "5.565ns", "5.565ns", "5.565ns",
-        ]
-        # cim.operations_init_latency = [
-        #     "2200000.821ns", "2200000.821ns", "2200000.821ns", "2200000.821ns", "2200000.56ns",
-        # ]
-        # cim.operations_on_word_latency = [
-        #     "2200000.821ns", "2200000.821ns", "2200000.821ns", "2200000.821ns", "2200000.56ns",
-        # ]
+        """
+        NVSim parameter
+        Timing:
+        -  Read Latency = 4.432ns
+        |--- H-Tree Latency = 257.820ps
+        |--- Mat Latency    = 4.174ns
+            |--- Predecoder Latency = 195.646ps
+            |--- Subarray Latency   = 3.979ns
+                |--- Row Decoder Latency = 270.473ps
+                |--- Bitline Latency     = 38.481ps
+                |--- Senseamp Latency    = 3.000ns
+                |--- Mux Latency         = 9.758ps
+                |--- Precharge Latency   = 277.810ps
+                |--- Subaddon component Latency = 660.000ps
+            |--- Mataddon component Latency   = 0.000ps
+        """
+        cim.operations_init_latency = [ "4.432ns", "4.432ns", "4.432ns", "4.432ns", "4.432ns", ]
+        cim.operations_on_word_latency = [ "4.432ns", "4.432ns", "4.432ns", "4.432ns", "4.432ns", ]
+        cim.operations_on_H_tree_latency = [ "257.82ps", "257.82ps", "257.82ps", "257.82ps", "257.82ps", ]
+        cim.operations_on_Predecoder_latency = [ "195.65ps", "195.65ps", "195.65ps", "195.65ps", "195.65ps", ]
+        cim.operations_on_Row_decoder_latency = [ "270ps", "270ps", "270ps", "270ps", "270ps", ]
+        cim.operations_on_Column_latency = [ "3.709ns", "3.709ns", "3.709ns", "3.709ns", "3.709ns", ]
+        
 except Exception as e:
     print("WARNING: CIM not enabled or SimObjects not found:", e) 
 # 53936084592
@@ -118,7 +131,7 @@ except Exception as e:
 system.cpu.createInterruptController()
 
 # --- Binary ---
-binary = "./tests/test-progs/lab/bin/hello64-static"
+binary = "./tests/test-progs/cim/bin/hello64-static"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
 
 EndAddress = 0x19000000

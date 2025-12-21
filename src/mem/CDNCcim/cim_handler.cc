@@ -26,6 +26,10 @@ CimHandler::CimHandler(const CimHandlerParams &params)
       numArrayBits(params.num_array_bits),
       operationsInitLatency(params.operations_init_latency),
       operationsOnWordLatency(params.operations_on_word_latency),
+      operationsOnHTreeLatency(params.operations_on_H_tree_latency),
+      operationsOnPredecoderLatency(params.operations_on_Predecoder_latency),
+      operationsOnRowDecoderLatency(params.operations_on_Row_decoder_latency),
+      operationsOnColumnLatency(params.operations_on_Column_latency),
       cimOperationHandler(params.cim_operation_handler)
 {
     DPRINTF(CIMDBG, "CimHandler Constructed! this_ptr: %p\n", this);
@@ -70,9 +74,9 @@ CimHandler::regionSizeBytes() const
 void
 CimHandler::cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t *host_addr)
 {
-    DPRINTF(CIMDBG, "call cimFetchCommand\n");
-    DPRINTF(CIMDBG, "[%s:%s:%s] from address: 0x%lx : command: 0x%016lx \n",
-        __FILE__, __func__, __LINE__, pkt->getAddr(), *(uint64_t *)host_addr);
+    // DPRINTF(CIMDBG, "call cimFetchCommand\n");
+    // DPRINTF(CIMDBG, "[%s:%s:%s] from address: 0x%lx : command: 0x%016lx \n",
+    //     __FILE__, __func__, __LINE__, pkt->getAddr(), *(uint64_t *)host_addr);
 
     uint64_t *command_address = reinterpret_cast<uint64_t *>(
         abstract_mem->toHostAddr(commandWriteAddress));
@@ -134,23 +138,14 @@ CimHandler::cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t
     command_address[2] = 0ul;
     command_address[3] = 0ul;
 
-    DPRINTF(CIMDBG,
-    "cimFetchCommand BEFORE exec @%lu unionBusyUntil=%lu bank0Ready=%lu\n",
-    curTick(), unionBusyUntil, unitReleaseTime[0]);
-
     cimExecuteCommand(abstract_mem, command);
-
-    DPRINTF(CIMDBG,
-    "cimFetchCommand AFTER  exec @%lu unionBusyUntil=%lu bank0Ready=%lu\n",
-    curTick(), unionBusyUntil, unitReleaseTime[0]);
 }
 
 void
 CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &command)
 {
-    cimOpCmdCount++;
-    DPRINTF(CIMDBG, "[%s:%s:%s] cimExecuteCommand\n", __FILE__, __func__, __LINE__);
-    command.print();
+    // DPRINTF(CIMDBG, "[%s:%s:%s] cimExecuteCommand\n", __FILE__, __func__, __LINE__);
+    // command.print();
 
     const size_t numBanks = (1ull << numBankBits);
     const size_t numMats = (1ull << numMatBits);
@@ -174,6 +169,8 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
             if ((command.mat_mask32 & (1u << mat)) == 0u)
                 continue;
 
+            cimUpdateLatencyTable(false, command.operation_type, bank);
+
             for (size_t array = 0; array < numArrays; array++) {
                 if ((command.array_mask32 & (1u << array)) == 0u)
                     continue;
@@ -181,8 +178,6 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
                 for (size_t column = 0; column < numColumns; column++) {
                     if ((command.column_mask & (1ull << column)) == 0ull)
                         continue;
-
-                    cimUpdateLatencyTable(false, command.operation_type, bank);
 
                     switch (static_cast<OperationType>(command.operation_type)) {
                         case OperationType::AND: {
@@ -226,7 +221,7 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
                         case OperationType::OR: {
                             const uint16_t dst_row = static_cast<uint16_t>(
                                 static_cast<uint64_t>(command.dest) & row_mask);
-
+                            
                             uint8_t *dest = addressTranslator(
                                 abstract_mem,
                                 resultTemporaryBufferAddress,
@@ -235,7 +230,7 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
                                 static_cast<uint8_t>(mat),
                                 static_cast<uint8_t>(array),
                                 static_cast<uint8_t>(column));
-
+                            
                             std::vector<uint8_t *> rows;
                             for (auto &r : command.row_number) {
                                 if (r == 0xffffu)
@@ -255,8 +250,8 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
                                         static_cast<uint8_t>(column)));
                                 }
                             }
-
-                            assert(rows.size() > 1);
+                            
+                            //assert(rows.size() > 1);
                             cimOperationHandler->OR(rows, dest, command.byte_mask);
                             break;
                         }
@@ -386,35 +381,35 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
     }
 }
 
+/*
+std::vector<Tick> operationsOnHTreeLatency;
+std::vector<Tick> operationsOnPredecoderLatency;
+std::vector<Tick> operationsOnRowDecoderLatency;
+std::vector<Tick> operationsOnColumnLatency;
+*/
 void
 CimHandler::cimUpdateLatencyTable(bool init, uint8_t operation, size_t bank)
 {
-    const Tick delta = init
-        ? operationsInitLatency[operation % 0x80]
-        : operationsOnWordLatency[operation % 0x80];
+    int mux = 4;
+    Tick latency_tick = operationsOnHTreeLatency[operation % 0x80] 
+                        + operationsOnPredecoderLatency[operation % 0x80]
+                        + operationsOnRowDecoderLatency[operation % 0x80]
+                        + mux * operationsOnColumnLatency[operation % 0x80]; 
 
-    Tick start, end;
-
-    if ((int64_t)unitReleaseTime[bank] - (int64_t)curTick() > 0) {
-        start = unitReleaseTime[bank];
-        end = unitReleaseTime[bank] + delta;
-        unitReleaseTime[bank] = end;
+    if (init) {
+        unitReleaseTime[bank] = 
+            (static_cast<int64_t>(unitReleaseTime[bank]) - static_cast<int64_t>(curTick()) > 0)
+            ? unitReleaseTime[bank] + operationsInitLatency[operation % 0x80]
+            : curTick() + operationsInitLatency[operation % 0x80];
     } else {
-        start = curTick();
-        end = curTick() + delta;
-        unitReleaseTime[bank] = end;
+        unitReleaseTime[bank] = 
+            (static_cast<int64_t>(unitReleaseTime[bank]) - static_cast<int64_t>(curTick()) > 0)
+            ? unitReleaseTime[bank] + latency_tick
+            : curTick() + latency_tick;
     }
-
-    cimWorkTicksSum += delta;
-    if (init) cimInitChunkCount++; else cimWordChunkCount++;
-
-    if (start >= unionBusyUntil) {
-        cimWorkTicksUnion += (end - start);
-        unionBusyUntil = end;
-    } else if (end > unionBusyUntil) {
-        cimWorkTicksUnion += (end - unionBusyUntil);
-        unionBusyUntil = end;
-    }
+    DPRINTF(
+        CIMDBG, "[%s:%s:%s] init: %d\t unitReleaseTime[%d]: %d\n", __FILE__,
+        __func__, __LINE__, init, bank, unitReleaseTime[bank]);
 }
 
 uint8_t *
@@ -443,29 +438,38 @@ CimHandler::addressTranslator(AbstractMemory *abstract_mem,
 Tick
 CimHandler::getCimLatency(const Addr &addr)
 {
-    const uint64_t base = static_cast<uint64_t>(readWriteAddress);
+    const uint64_t rw_base   = static_cast<uint64_t>(readWriteAddress);
+    const uint64_t tmp_base  = static_cast<uint64_t>(resultTemporaryBufferAddress);
+    const uint64_t region_sz = regionSizeBytes();
+
+    uint64_t base = 0;
+
+    const bool in_rw  = (addr >= rw_base)  && (addr < rw_base  + region_sz);
+    const bool in_tmp = (addr >= tmp_base) && (addr < tmp_base + region_sz);
+
+    if (in_rw) {
+        base = rw_base;
+    } else if (in_tmp) {
+        base = tmp_base;
+    } else {
+        return 0;
+    }
+
     const uint64_t off = static_cast<uint64_t>(addr) - base;
 
-    const uint64_t bank_shift = static_cast<uint64_t>(numMatBits)
-                              + static_cast<uint64_t>(numArrayBits)
-                              + static_cast<uint64_t>(numRowBits)
-                              + static_cast<uint64_t>(numColumnBits);
+    const uint64_t bank_shift =
+        static_cast<uint64_t>(numMatBits) +
+        static_cast<uint64_t>(numArrayBits) +
+        static_cast<uint64_t>(numRowBits) +
+        static_cast<uint64_t>(numColumnBits);
 
     const uint8_t bank = static_cast<uint8_t>(
         (off >> bank_shift) & ((1ull << numBankBits) - 1ull));
 
-    int64_t left_time =
-        (static_cast<int64_t>(unitReleaseTime[bank]) - static_cast<int64_t>(curTick()));
+    const int64_t left_time =
+        static_cast<int64_t>(unitReleaseTime[bank]) - static_cast<int64_t>(curTick());
 
-    DPRINTF(CIMDBG, "[%s:%s:%s] left_time: %d, for address: 0x%lx\n",
-        __FILE__, __func__, __LINE__, left_time, addr);
-    DPRINTF(CIMDBG,
-        "getCimLatency @%lu addr=0x%lx bank=%u unitRelease=%lu left=%ld\n",
-        curTick(), addr, bank, unitReleaseTime[bank], left_time);
-
-    if (left_time > 0)
-        return left_time;
-    return 0;
+    return (left_time > 0) ? static_cast<Tick>(left_time) : 0;
 }
 
 void
@@ -473,28 +477,6 @@ CimHandler::regStats()
 {
     SimObject::regStats();
     using namespace gem5::statistics;
-
-    cimWorkTicksSum
-        .name(name() + ".cimWorkTicksSum")
-        .desc("Sum of internal CIM work time (ticks) "
-              "== sum of all init+on_word latencies added");
-
-    cimWorkTicksUnion
-        .name(name() + ".cimWorkTicksUnion")
-        .desc("Union of CIM busy time across all banks (ticks); "
-              "approx. wall-clock busy time for CIM");
-
-    cimInitChunkCount
-        .name(name() + ".cimInitChunkCount")
-        .desc("# of init-latency chunks added to schedule");
-
-    cimWordChunkCount
-        .name(name() + ".cimWordChunkCount")
-        .desc("# of on-word-latency chunks added to schedule");
-
-    cimOpCmdCount
-        .name(name() + ".cimOpCmdCount")
-        .desc("# of CIM commands (cimExecuteCommand calls)");
 }
 
 void
@@ -516,48 +498,6 @@ CimHandler::CommandDecode::print()
     DPRINTFR(CIMDBG, "------\n");
 }
 
-Tick
-CimHandler::scheduleCmdAndGetExtraDelay(PacketPtr pkt)
-{
-    const uint8_t *data = pkt->getConstPtr<uint8_t>();
-    uint64_t cmd0 = 0;
-    std::memcpy(&cmd0, data, sizeof(uint64_t));
-
-    const uint8_t operation_type = static_cast<uint8_t>((cmd0 >> 56) & 0xffu);
-
-    auto opIndex = [&](uint8_t op)->int {
-        switch (static_cast<OperationType>(op)) {
-        case OperationType::AND:            return 0;
-        case OperationType::OR:             return 1;
-        case OperationType::XOR:            return 2;
-        case OperationType::NOT_COND:       return 3;
-        case OperationType::COPY:           return 4;
-        case OperationType::short_AND:      return 0;
-        case OperationType::short_OR:       return 1;
-        case OperationType::short_XOR:      return 2;
-        case OperationType::short_NOT_COND: return 3;
-        case OperationType::short_COPY:     return 4;
-        default:
-            return -1;
-        }
-    };
-
-    const int idx = opIndex(operation_type);
-
-    Tick cmdLat = 0;
-    if (idx >= 0 && idx < static_cast<int>(opInitLat.size())) {
-        cmdLat = opInitLat[idx];
-    }
-
-    const Tick now = curTick();
-    const Tick start = std::max(now, cimReadyAt);
-    const Tick finish = start + cmdLat;
-    cimReadyAt = finish;
-
-    DPRINTF(CIMDBG, "scheduleCmdAndGetExtraDelay: curTick=%lu", curTick());
-
-    return finish - now;
-}
 
 } // namespace memory
 } // namespace gem5

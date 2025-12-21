@@ -68,15 +68,20 @@ class CimHandler : public SimObject
 
     std::vector<Tick> operationsInitLatency;
     std::vector<Tick> operationsOnWordLatency;
+    std::vector<Tick> operationsOnHTreeLatency;
+    std::vector<Tick> operationsOnPredecoderLatency;
+    std::vector<Tick> operationsOnRowDecoderLatency;
+    std::vector<Tick> operationsOnColumnLatency;
+    
 
     Tick *unitReleaseTime;
 
-    statistics::Scalar cimWorkTicksSum;
-    statistics::Scalar cimWorkTicksUnion;
-    statistics::Scalar cimInitChunkCount;
-    statistics::Scalar cimWordChunkCount;
-    statistics::Scalar cimOpCmdCount;
-    Tick unionBusyUntil = 0;
+    // statistics::Scalar cimWorkTicksSum;
+    // statistics::Scalar cimWorkTicksUnion;
+    // statistics::Scalar cimInitChunkCount;
+    // statistics::Scalar cimWordChunkCount;
+    // statistics::Scalar cimOpCmdCount;
+    // Tick unionBusyUntil = 0;
 
     void cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &command);
     void cimUpdateLatencyTable(bool init, uint8_t operation, size_t bank);
@@ -111,6 +116,12 @@ class CimHandler : public SimObject
         return in_rw || in_tmp || in_cmd;
     }
 
+    inline bool isTmpAddressRange(const Addr &addr) const
+    {
+        const Addr tmp_end = resultTemporaryBufferAddress + regionSizeBytes();
+        return (addr >= resultTemporaryBufferAddress) && (addr < tmp_end);
+    }
+
     inline bool isCimReadWriteRegion(const Addr &addr) const
     {
         const Addr end = readWriteAddress + regionSizeBytes();
@@ -141,8 +152,7 @@ class CimHandler : public SimObject
     Addr getReadWriteAddress() const { return readWriteAddress; }
     Addr getResultTemporaryBufferAddress() const { return resultTemporaryBufferAddress; }
     Addr getCommandWriteAddress() const { return commandWriteAddress; }
-
-    Tick scheduleCmdAndGetExtraDelay(PacketPtr pkt);
+    uint64_t getRegionSizeBytes() const { return regionSizeBytes(); }
 };
 
 } // namespace memory
