@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "endianness": "little",
+  "desc_bits": 4,
+  "geo_grid": {
+    "dtype": "uint8",
+    "max": 90,
+    "qparams": [-100, -50, 200],
+    "meaning": "grid_x, grid_y in [0..max]"
+  },
+  "bins": {
+    "map_desc_q4": {
+      "file": "map_desc_q4.bin",
+      "dtype": "uint8",
+      "shape": [512, 64],
+      "c_order": true,
+      "bytes": 32768
+    },
+    "map_geo_grid": {
+      "file": "map_geo_grid.bin",
+      "dtype": "uint8",
+      "shape": [512, 2],
+      "c_order": true,
+      "bytes": 1024
+    }
+  }
+}

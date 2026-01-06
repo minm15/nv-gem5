@@ -11,11 +11,11 @@ class CimHandler(SimObject):
         Addr(0x10000000), "Physical address of the CIM read/write region"
     )
     result_temporary_buffer_address = Param.Addr(
-        Addr(0x14000000),
+        Addr(0x18000000),
         "Physical address of the CIM temporary buffer region",
     )
     command_write_address = Param.Addr(
-        Addr(0x18000000), "Physical address of the CIM command region"
+        Addr(0x20000000), "Physical address of the CIM command region"
     )
 
     num_column_bits = Param.UInt8(6, "Row size in bytes = 2^num_column_bits")

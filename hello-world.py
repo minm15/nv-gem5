@@ -20,41 +20,70 @@ system.cpu = DerivO3CPU()
 
 # Bus
 system.membus = SystemXBar()
+system.l2_xbar = L2XBar()
 system.membus.frontend_latency = 10
 system.membus.forward_latency = 10
 system.membus.response_latency = 10
 system.membus.snoop_response_latency = 10
 
-class L1ICache(Cache):
-    size = "32kB"
-    assoc = 2
-    tag_latency = 1
-    data_latency = 1
-    response_latency = 1
-    mshrs = 4
-    tgts_per_mshr = 20
+# --- L1 Cache (single core) ---
+system.cpu.icache = Cache(
+    size='64kB',   # Orin A78AE
+    assoc=2,
+    tag_latency=1,
+    data_latency=1,
+    response_latency=1,
+    mshrs=4,
+    tgts_per_mshr=20
+)
 
-class L1DCache(Cache):
-    size = "32kB"
-    assoc = 2
-    tag_latency = 1
-    data_latency = 1
-    response_latency = 1
-    mshrs = 8
-    tgts_per_mshr = 20
-    write_buffers = 8
+system.cpu.dcache = Cache(
+    size='64kB',   # Orin A78AE
+    assoc=2,
+    tag_latency=1,
+    data_latency=1,
+    response_latency=1,
+    mshrs=8,
+    tgts_per_mshr=20,
+    write_buffers=8
+)
 
-# L1 caches
-system.cpu.icache = L1ICache()
-system.cpu.dcache = L1DCache()
+# --- L2 Cache (per-core) ---
+system.l2_cache = Cache(
+    size='256kB',  # single core L2
+    assoc=8,      
+    tag_latency=10,
+    data_latency=10,
+    response_latency=5,
+    mshrs=20,
+    tgts_per_mshr=12
+)
 
-# CPU <-> L1
-system.cpu.icache_port = system.cpu.icache.cpu_side
-system.cpu.dcache_port = system.cpu.dcache.cpu_side
+# --- L3 Cache (per-cluster) ---
+system.l3_cache = Cache(
+    size='2MB',    # single cluster slice
+    assoc=12,
+    tag_latency=20,
+    data_latency=20,
+    response_latency=10,
+    mshrs=20,
+    tgts_per_mshr=12
+)
 
-# L1 <-> membus
-system.cpu.icache.mem_side = system.membus.cpu_side_ports
-system.cpu.dcache.mem_side = system.membus.cpu_side_ports
+# L1 -> L2XBar
+system.cpu.icache.cpu_side = system.cpu.icache_port
+system.cpu.dcache.cpu_side = system.cpu.dcache_port
+system.cpu.icache.mem_side = system.l2_xbar.cpu_side_ports
+system.cpu.dcache.mem_side = system.l2_xbar.cpu_side_ports
+
+# L2XBar -> L2
+system.l2_cache.cpu_side = system.l2_xbar.mem_side_ports
+
+# L2 -> L3 (Direct)
+system.l2_cache.mem_side = system.l3_cache.cpu_side
+
+# L3 -> MemBus
+system.l3_cache.mem_side = system.membus.cpu_side_ports
 
 system.system_port = system.membus.cpu_side_ports
 
@@ -86,7 +115,7 @@ system.mem_ctrl.dram.device_size = "1GiB"
 system.mem_ctrl.dram.device_bus_width = 64
 system.mem_ctrl.dram.devices_per_rank = 1
 system.mem_ctrl.dram.ranks_per_channel = 1
-system.mem_ctrl.dram.banks_per_rank = 32
+system.mem_ctrl.dram.banks_per_rank = 16
 system.mem_ctrl.dram.range = system.mem_ranges[0]
 
 # CIM handler 
@@ -94,7 +123,7 @@ try:
     system.mem_ctrl.dram.cim_handler_list = [CimHandler()]
     for cim in system.mem_ctrl.dram.cim_handler_list:
         cim.num_column_bits = 6
-        cim.num_bank_bits   = 3
+        cim.num_bank_bits   = 4
         cim.num_mat_bits    = 4
         cim.num_array_bits  = 4
         cim.num_row_bits    = 9
@@ -126,16 +155,17 @@ try:
         
 except Exception as e:
     print("WARNING: CIM not enabled or SimObjects not found:", e) 
-# 53936084592
 # IRQs
 system.cpu.createInterruptController()
 
 # --- Binary ---
-binary = "./tests/test-progs/cim/bin/hello64-static"
+#binary = "./tests/test-progs/lab/bin/hello64-static"
+#binary = "./tests/test-progs/matching_simulation/bin/matching_sim"
+binary = "./tests/test-progs/ivf_matching/bin/ivf_sim"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
 
-EndAddress = 0x19000000
-SimpleOpts.add_option("--EndAddress", type=str, default="0x19000000")
+EndAddress = 0x21000000
+SimpleOpts.add_option("--EndAddress", type=str, default="0x21000000")
 
 process = Process()
 process.cmd = [binary]
@@ -146,17 +176,21 @@ system.cpu.createThreads()
 root = Root(full_system=False, system=system)
 m5.instantiate()
 
-# NVM array (readWriteAddress) 64MiB: [0x10000000, 0x14000000)
+# NVM array (readWriteAddress) 64MiB: [0x10000000, 0x18000000)
 process.map(vaddr=Addr(0x10000000), paddr=Addr(0x10000000),
-            size=0x04000000, cacheable=False)
+            size=0x08000000, cacheable=False)
 
-# temp buffer (resultTemporaryBufferAddress) 64MiB: [0x14000000, 0x18000000)
-process.map(vaddr=Addr(0x14000000), paddr=Addr(0x14000000),
-            size=0x04000000, cacheable=False)
+# temp buffer (resultTemporaryBufferAddress) 64MiB: [0x18000000, 0x18000000)
+process.map(vaddr=Addr(0x18000000), paddr=Addr(0x18000000),
+            size=0x08000000, cacheable=False)
 
 # cmd/mmio (commandWriteAddress) at 0x18000000
-process.map(vaddr=Addr(0x18000000), paddr=Addr(0x18000000),
+process.map(vaddr=Addr(0x20000000), paddr=Addr(0x20000000),
             size=0x1000, cacheable=False)
+
+# process.map(vaddr=Addr(0x10000000), paddr=Addr(0x10000000), size=0x04000000, cacheable=False)
+# process.map(vaddr=Addr(0x14000000), paddr=Addr(0x14000000), size=0x04000000, cacheable=False)
+# process.map(vaddr=Addr(0x18000000), paddr=Addr(0x18000000), size=0x1000, cacheable=False)
 
 print("Beginning simulation!")
 exit_event = m5.simulate()

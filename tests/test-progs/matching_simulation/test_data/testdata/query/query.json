@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "endianness": "little",
+  "session": "test_session",
+  "desc_bits": 4,
+  "geo_grid": {
+    "dtype": "uint8",
+    "max": 90,
+    "qparams": [-100, -50, 200],
+    "meaning": "grid_x, grid_y in [0..max]"
+  },
+  "ivf": {
+    "map_json_ref": "./testdata/map/map.json"
+  },
+  "bins": {
+    "query_desc_q4": {
+      "file": "query_desc_q4.bin",
+      "dtype": "uint8",
+      "shape": [4, 64],
+      "c_order": true,
+      "bytes": 256
+    },
+    "query_step_pose_grid": {
+      "file": "query_step_pose_grid.bin",
+      "dtype": "uint8",
+      "shape": [1, 2],
+      "c_order": true,
+      "bytes": 2
+    },
+    "query_step_offsets": {
+      "file": "query_step_offsets.bin",
+      "dtype": "uint32",
+      "shape": [2],
+      "c_order": true,
+      "bytes": 8
+    },
+    "query_step_counts": {
+      "file": "query_step_counts.bin",
+      "dtype": "uint16",
+      "shape": [1],
+      "c_order": true,
+      "bytes": 2
+    },
+    "query_step_relodo_i": {
+      "file": "query_step_relodo_i.bin",
+      "dtype": "int32",
+      "shape": [1],
+      "c_order": true,
+      "bytes": 4
+    },
+    "query_step_t_now": {
+      "file": "query_step_t_now.bin",
+      "dtype": "float64",
+      "shape": [1],
+      "c_order": true,
+      "bytes": 8
+    }
+  }
+}
