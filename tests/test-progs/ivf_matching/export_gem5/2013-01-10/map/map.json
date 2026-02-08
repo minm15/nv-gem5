@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "endianness": "little",
+  "desc_bits": 4,
+  "geo_grid": {
+    "dtype": "uint8",
+    "max": 115,
+    "qparams": [
+      -766.5342572341847,
+      -359.22399274742264,
+      914.5806047710016
+    ],
+    "meaning": "grid_x, grid_y in [0..max]; computed by shared span R"
+  },
+  "ivf": {
+    "nlist": 128,
+    "space": "aug128_l2",
+    "extra": {
+      "ivf_impl": "ZeroAwareIVF",
+      "val_scale": {
+        "ref": "ivf_val_scale"
+      },
+      "idf_w": {
+        "ref": "ivf_idf_w"
+      },
+      "alpha_value": 1.0,
+      "beta_presence": 5.0,
+      "use_idf": 1
+    }
+  },
+  "bins": {
+    "map_desc_q4": {
+      "file": "map_desc_q4.bin",
+      "dtype": "uint8",
+      "shape": [
+        408762,
+        64
+      ],
+      "c_order": true,
+      "bytes": 26160768
+    },
+    "map_geo_grid": {
+      "file": "map_geo_grid.bin",
+      "dtype": "uint8",
+      "shape": [
+        408762,
+        2
+      ],
+      "c_order": true,
+      "bytes": 817524
+    },
+    "ivf_centroids": {
+      "file": "ivf_centroids.bin",
+      "dtype": "float32",
+      "shape": [
+        128,
+        128
+      ],
+      "c_order": true,
+      "bytes": 65536
+    },
+    "ivf_postings_offsets": {
+      "file": "ivf_postings_offsets.bin",
+      "dtype": "uint32",
+      "shape": [
+        129
+      ],
+      "c_order": true,
+      "bytes": 516
+    },
+    "ivf_postings_map_ids": {
+      "file": "ivf_postings_map_ids.bin",
+      "dtype": "int32",
+      "shape": [
+        408762
+      ],
+      "c_order": true,
+      "bytes": 1635048
+    },
+    "ivf_val_scale": {
+      "file": "ivf_val_scale.bin",
+      "dtype": "float32",
+      "shape": [
+        64
+      ],
+      "c_order": true,
+      "bytes": 256
+    },
+    "ivf_idf_w": {
+      "file": "ivf_idf_w.bin",
+      "dtype": "float32",
+      "shape": [
+        64
+      ],
+      "c_order": true,
+      "bytes": 256
+    }
+  },
+  "desc_quant": {
+    "method": "quantile_digitize_nonzero",
+    "thresholds": [
+      2.8787333011627236,
+      4.7820000648498535,
+      6.559000015258789,
+      8.288000106811523,
+      10.008000373840332,
+      11.6850004196167,
+      13.416000366210938,
+      15.156000137329102,
+      17.051000595092773,
+      19.158000946044922,
+      21.562000274658203,
+      24.475000381469727,
+      28.28700065612793,
+      34.17426630655918
+    ],
+    "note": "q=0 means zero; nonzero mapped to 1..15 for 4-bit"
+  }
+}

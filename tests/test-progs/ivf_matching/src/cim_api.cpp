@@ -427,6 +427,35 @@ CimModule::copy_temp_to_cpu(void *cpu_array,
 }
 
 void
+CimModule::copy_temp_block_to_cpu(void *cpu_array,
+                                  uint16_t bank,
+                                  uint16_t mat,
+                                  uint16_t array,
+                                  uint16_t start_row,
+                                  size_t num_rows)
+{
+    checkGeometryReady();
+
+    assert(cpu_array != nullptr);
+    assert(tempAddress != nullptr);
+    assert(num_rows > 0);
+
+    // 計算記憶體起始位置
+    const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
+    // 計算 start_row 的偏移量
+    const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, start_row);
+    
+    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+    
+    // 計算總大小 = 行數 * 每行位元組數
+    size_t row_size = (1ull << columnBits);
+    size_t total_size = num_rows * row_size;
+
+    // 一次搬運整塊連續記憶體
+    std::memcpy(cpu_array, src, total_size);
+}
+
+void
 CimModule::CommandEncode::print()
 {
     printf("-------\n");

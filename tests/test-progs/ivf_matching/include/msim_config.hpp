@@ -4,12 +4,14 @@
 
 namespace msim {
 
-// Hardcoded dataset paths (you said it's OK to hardcode NAS paths).
-static constexpr const char* kMapDir   = "/home/kaiii/nas/homes/kaiii_data/export_gem5_hamming/2013-01-10/map";
-static constexpr const char* kQueryDir = "/home/kaiii/nas/homes/kaiii_data/export_gem5_hamming/2013-01-10/query";
+// static constexpr const char* kMapDir   = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/export_gem5/2013-01-10/map";
+// static constexpr const char* kQueryDir = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/export_gem5/2013-01-10/query";
 
 // static constexpr const char* kMapDir   = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/test/map";
 // static constexpr const char* kQueryDir = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/test/query";
+
+static constexpr const char* kMapDir   = "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/map";
+static constexpr const char* kQueryDir = "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/query";
 
 // CIM geometry (512x512 bits per array => 512 rows, 512 cols => rowBytes=64).
 static constexpr uint32_t kRowBits   = 9;   // 2^9  = 512 rows

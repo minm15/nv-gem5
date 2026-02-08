@@ -37,6 +37,9 @@ struct IvfPlacement {
 
 IvfPlacement compute_ivf_placement(const IvfMapBins& map);
 
+IvfPlacement compute_ivf_placement(const IvfMapBins& map,
+                                   const std::vector<uint32_t>& order);
+
 // Helpers: decode linear array index -> (bank,mat,array)
 void decode_linear_array(uint32_t linear_array,
                          uint16_t bank0,

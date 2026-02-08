@@ -33,7 +33,6 @@ APP_SRCS_CIM := \
 
 # --- Host test compiler/flags (x86 host) ---
 HOST_CXX ?= g++-12
-CXXFLAGS_TEST := -O2 -DNDEBUG -Iinclude -std=gnu++17
 
 APP_SRCS_TEST := \
   src/ivf_bank_check.cpp \

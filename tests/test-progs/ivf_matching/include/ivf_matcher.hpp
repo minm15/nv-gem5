@@ -22,14 +22,26 @@ public:
         // enough bits to count mismatches up to 64 (6 bits). keep 8 planes for safety.
         std::array<MaskRow, 8> b{};
         void clear();
+        // add one row (MaskRow wrapper)
         void add_mask(const MaskRow& x);
-        uint8_t lane_value(int lane) const;
-    };
+
+        // add one row (raw bytes, length = kRowBytes)
+        void add_mask_row_bytes(const uint8_t* row_bytes);
+
+        // add N rows from a block: rows[r] at (base + r*stride_bytes)
+        void add_mask_block_bytes(const uint8_t* base,
+                                size_t stride_bytes,
+                                size_t num_rows);
+            uint8_t lane_value(int lane) const;
+        };
 
     IvfMatcher(CimModule& cim, const IvfMapBins& map, const IvfPlacement& place);
 
     // nprobe: how many IVF buckets to scan (0 => scan all lists)
-    MatchResult match_one_query_desc(uint8_t qgx, uint8_t qgy, const uint8_t* qdesc64, uint32_t nprobe = 10, uint32_t max_groups_per_list = 0);
+    // MatchResult match_one_query_desc(uint8_t qgx, uint8_t qgy, const uint8_t* qdesc64, uint32_t nprobe = 10, uint32_t max_groups_per_list = 0);
+    MatchResult match_one_query_desc(uint8_t qgx, uint8_t qgy, const uint8_t* qdesc64, uint32_t nprobe, uint32_t max_groups_per_list);
+
+    std::vector<MatchResult> match_one_step(uint8_t qgx, uint8_t qgy, const uint8_t* desc_ptr, size_t m, uint32_t nprobe, uint32_t max_groups_per_list);
 
 private:
     // list selection (CPU)

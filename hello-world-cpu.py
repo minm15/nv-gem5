@@ -17,18 +17,18 @@ system.cpu = DerivO3CPU()
 # Bus
 system.membus = SystemXBar()
 system.l2_xbar = L2XBar()
-system.membus.frontend_latency = 10
-system.membus.forward_latency = 10
-system.membus.response_latency = 10
-system.membus.snoop_response_latency = 10
+system.membus.frontend_latency = 1
+system.membus.forward_latency = 1
+system.membus.response_latency = 1
+system.membus.snoop_response_latency = 1
 
 # --- L1 Cache (single core) ---
 system.cpu.icache = Cache(
     size='64kB',   # Orin A78AE
     assoc=2,
-    tag_latency=10,
-    data_latency=10,
-    response_latency=10,
+    tag_latency=5,
+    data_latency=5,
+    response_latency=5,
     mshrs=4,
     tgts_per_mshr=20
 )
@@ -36,8 +36,8 @@ system.cpu.icache = Cache(
 system.cpu.dcache = Cache(
     size='64kB',   # Orin A78AE
     assoc=2,
-    tag_latency=10,
-    data_latency=10,
+    tag_latency=5,
+    data_latency=5,
     response_latency=5,
     mshrs=8,
     tgts_per_mshr=20,
@@ -48,8 +48,8 @@ system.cpu.dcache = Cache(
 system.l2_cache = Cache(
     size='256kB',  # single core L2
     assoc=8,      
-    tag_latency=15,
-    data_latency=15,
+    tag_latency=10,
+    data_latency=10,
     response_latency=8,
     mshrs=20,
     tgts_per_mshr=12
@@ -106,8 +106,12 @@ system.cpu.createInterruptController()
 binary = "./tests/test-progs/simulation_kdtree/bin/pf_kernel_roi"
 map_path = "./tests/test-progs/simulation_kdtree/pf_export/map.bin"
 frames_path = "./tests/test-progs/simulation_kdtree/pf_export/frames.bin"  
+mcl_path = "/home/kaiii/tmp/pfivf_roi.bin"
+hello_binary = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/hello/bin/arm/linux/hello"
+
+
 process = Process()
-process.cmd = [binary, map_path, frames_path]
+process.cmd = [binary, mcl_path]
 system.cpu.workload = process
 system.cpu.createThreads()
 system.workload = SEWorkload.init_compatible(binary)

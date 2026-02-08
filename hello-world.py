@@ -3,6 +3,7 @@ from m5.objects import *
 from configs.common import SimpleOpts
 from m5.objects import Cache
 from m5.objects import DerivO3CPU
+from m5.objects import StridePrefetcher
 
 
 # --- System ---
@@ -21,18 +22,20 @@ system.cpu = DerivO3CPU()
 # Bus
 system.membus = SystemXBar()
 system.l2_xbar = L2XBar()
-system.membus.frontend_latency = 10
-system.membus.forward_latency = 10
-system.membus.response_latency = 10
-system.membus.snoop_response_latency = 10
+system.membus.frontend_latency = 1
+system.membus.forward_latency = 1
+system.membus.response_latency = 1
+system.membus.snoop_response_latency = 1
+system.membus.width = 64 
+system.l2_xbar.width = 64
 
 # --- L1 Cache (single core) ---
 system.cpu.icache = Cache(
     size='64kB',   # Orin A78AE
     assoc=2,
-    tag_latency=1,
-    data_latency=1,
-    response_latency=1,
+    tag_latency=5,
+    data_latency=5,
+    response_latency=5,
     mshrs=4,
     tgts_per_mshr=20
 )
@@ -40,9 +43,9 @@ system.cpu.icache = Cache(
 system.cpu.dcache = Cache(
     size='64kB',   # Orin A78AE
     assoc=2,
-    tag_latency=1,
-    data_latency=1,
-    response_latency=1,
+    tag_latency=5,
+    data_latency=5,
+    response_latency=5,
     mshrs=8,
     tgts_per_mshr=20,
     write_buffers=8
@@ -54,7 +57,7 @@ system.l2_cache = Cache(
     assoc=8,      
     tag_latency=10,
     data_latency=10,
-    response_latency=5,
+    response_latency=8,
     mshrs=20,
     tgts_per_mshr=12
 )
@@ -62,7 +65,7 @@ system.l2_cache = Cache(
 # --- L3 Cache (per-cluster) ---
 system.l3_cache = Cache(
     size='2MB',    # single cluster slice
-    assoc=12,
+    assoc=16,
     tag_latency=20,
     data_latency=20,
     response_latency=10,
@@ -88,33 +91,33 @@ system.l3_cache.mem_side = system.membus.cpu_side_ports
 system.system_port = system.membus.cpu_side_ports
 
 system.mem_ctrl = MemCtrl()
-system.mem_ctrl.mem_sched_policy = "fcfs"
+system.mem_ctrl.mem_sched_policy = "frfcfs"
 system.mem_ctrl.min_writes_per_switch = 1
 system.mem_ctrl.min_reads_per_switch = 1
-system.mem_ctrl.static_frontend_latency = "5ns"
-system.mem_ctrl.static_backend_latency = "5ns"
-system.mem_ctrl.command_window = "5ns"
+system.mem_ctrl.static_frontend_latency = "1ns"
+system.mem_ctrl.static_backend_latency = "1ns"
+system.mem_ctrl.command_window = "1ns"
 system.mem_ctrl.port = system.membus.mem_side_ports
 
 system.mem_ctrl.dram = NVMInterface()
-system.mem_ctrl.dram.write_buffer_size = 128
-system.mem_ctrl.dram.read_buffer_size = 128
+system.mem_ctrl.dram.write_buffer_size = 2048
+system.mem_ctrl.dram.read_buffer_size = 2048
 system.mem_ctrl.dram.max_pending_writes = 64
 system.mem_ctrl.dram.max_pending_reads = 64
-system.mem_ctrl.dram.burst_length = 8
-system.mem_ctrl.dram.tCK = "1ns"
+system.mem_ctrl.dram.burst_length = 64
+system.mem_ctrl.dram.tCK = "1ps"
 system.mem_ctrl.dram.tREAD = "680ps"
-system.mem_ctrl.dram.tWRITE = "3530ps"
-system.mem_ctrl.dram.tSEND = "1ns"
-system.mem_ctrl.dram.tBURST = "1ns"
-system.mem_ctrl.dram.tWTR = "1ns"
-system.mem_ctrl.dram.tRTW = "1ns"
-system.mem_ctrl.dram.tCS = "1ns"
+system.mem_ctrl.dram.tWRITE = "1ps"
+system.mem_ctrl.dram.tSEND = "1ps"
+system.mem_ctrl.dram.tBURST = "1ps"
+system.mem_ctrl.dram.tWTR = "1ps"
+system.mem_ctrl.dram.tRTW = "1ps"
+system.mem_ctrl.dram.tCS = "1ps"
 system.mem_ctrl.dram.device_rowbuffer_size = "512B"
 system.mem_ctrl.dram.device_size = "1GiB"
 system.mem_ctrl.dram.device_bus_width = 64
-system.mem_ctrl.dram.devices_per_rank = 1
-system.mem_ctrl.dram.ranks_per_channel = 1
+system.mem_ctrl.dram.devices_per_rank = 16
+system.mem_ctrl.dram.ranks_per_channel = 16
 system.mem_ctrl.dram.banks_per_rank = 16
 system.mem_ctrl.dram.range = system.mem_ranges[0]
 
@@ -159,8 +162,7 @@ except Exception as e:
 system.cpu.createInterruptController()
 
 # --- Binary ---
-#binary = "./tests/test-progs/lab/bin/hello64-static"
-#binary = "./tests/test-progs/matching_simulation/bin/matching_sim"
+# binary = "./tests/test-progs/matching_simulation/bin/matching_sim"
 binary = "./tests/test-progs/ivf_matching/bin/ivf_sim"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
 

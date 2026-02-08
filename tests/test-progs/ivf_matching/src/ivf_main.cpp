@@ -16,6 +16,56 @@
 
 #include "msim_config.hpp"
 
+static std::vector<uint32_t> build_order_centroid_nn(const msim::IvfMapBins& map, uint32_t start = 0)
+{
+    const uint32_t K   = map.model.nlist;
+    const uint32_t dim = map.model.dim;
+    if (K == 0) return {};
+    if (map.model.centroids.size() != static_cast<size_t>(K) * dim) {
+        throw std::runtime_error("build_order_centroid_nn: invalid centroids");
+    }
+    start = (K ? (start % K) : 0);
+
+    auto dist2 = [&](uint32_t a, uint32_t b) -> float {
+        const float* ca = &map.model.centroids[static_cast<size_t>(a) * dim];
+        const float* cb = &map.model.centroids[static_cast<size_t>(b) * dim];
+        float s = 0.0f;
+        for (uint32_t i = 0; i < dim; ++i) {
+            const float d = ca[i] - cb[i];
+            s += d * d;
+        }
+        return s;
+    };
+
+    std::vector<uint32_t> order;
+    order.reserve(K);
+    std::vector<uint8_t> used(K, 0);
+
+    uint32_t cur = start;
+    used[cur] = 1;
+    order.push_back(cur);
+
+    for (uint32_t t = 1; t < K; ++t) {
+        uint32_t best = UINT32_MAX;
+        float best_d  = 0.0f;
+        for (uint32_t cand = 0; cand < K; ++cand) {
+            if (used[cand]) continue;
+            const float d = dist2(cur, cand);
+            if (best == UINT32_MAX || d < best_d) {
+                best = cand;
+                best_d = d;
+            }
+        }
+        if (best == UINT32_MAX) break;
+        used[best] = 1;
+        order.push_back(best);
+        cur = best;
+    }
+
+    for (uint32_t i = 0; i < K; ++i) if (!used[i]) order.push_back(i);
+    return order;
+}
+
 int main()
 {
     // ---- hardcoded by msim_config ----
@@ -23,7 +73,7 @@ int main()
     const std::string query_dir = msim::kQueryDir;
 
     // ---- fixed params ----
-    static constexpr uint32_t kNProbe = 32;
+    static constexpr uint32_t kNProbe = 8;
     static constexpr uint32_t kMaxGroupsPerList = 50; // 0=all; cap for faster debug/ROI
 
     try {
@@ -82,7 +132,9 @@ int main()
         map.model.idf_w         = map_loader.ivf().idf_w_f32;
 
         // ---- placement ----
-        const msim::IvfPlacement place = msim::compute_ivf_placement(map);
+        std::vector<uint32_t> order = build_order_centroid_nn(map, 0);
+        const msim::IvfPlacement place = msim::compute_ivf_placement(map, order);
+        // const msim::IvfPlacement place = msim::compute_ivf_placement(map);
 
         // ---- init CIM ----
         CimModule cim;
@@ -105,12 +157,20 @@ int main()
             m5_reset_stats(0, 0);
             m5_work_begin(1, static_cast<uint64_t>(s));
 
-            for (size_t i = 0; i < st.m; ++i) {
-                const uint8_t* qdesc = st.desc_ptr + i * 64u;
+            // for (size_t i = 0; i < st.m; ++i) {
+            //     const uint8_t* qdesc = st.desc_ptr + i * 64u;
 
-                const msim::MatchResult r =
-                    matcher.match_one_query_desc(st.gx, st.gy, qdesc, kNProbe, kMaxGroupsPerList);
+            //     const msim::MatchResult r =
+            //         matcher.match_one_query_desc(st.gx, st.gy, qdesc, kNProbe, kMaxGroupsPerList);
 
+            //     checksum += static_cast<uint64_t>(static_cast<uint32_t>(r.best_map_id)) +
+            //                 static_cast<uint64_t>(r.best_mismatch);
+            //     total_queries++;
+            // }
+
+            const auto results = matcher.match_one_step(st.gx, st.gy, st.desc_ptr, st.m, kNProbe, kMaxGroupsPerList);
+
+            for (const auto& r : results) {
                 checksum += static_cast<uint64_t>(static_cast<uint32_t>(r.best_map_id)) +
                             static_cast<uint64_t>(r.best_mismatch);
                 total_queries++;

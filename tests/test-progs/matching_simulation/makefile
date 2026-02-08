@@ -17,13 +17,15 @@ OUT_CIM := bin/matching_sim
 # --- Sources ---
 CIM_API_SRC := src/cim_api.cpp
 
-APP_SRCS_CIM := \
-  src/main.cpp \
-  src/file_utils.cpp \
-  src/msim_bins.cpp \
-  src/layout.cpp \
-  src/nvm_map_writer.cpp \
-  src/noivf_matcher.cpp
+# APP_SRCS_CIM := \
+#   src/main.cpp \
+#   src/file_utils.cpp \
+#   src/msim_bins.cpp \
+#   src/layout.cpp \
+#   src/nvm_map_writer.cpp \
+#   src/noivf_matcher.cpp
+
+APP_SRCS_CIM := src/or_sanity16.cpp
 
 # --- Flags ---
 CXXFLAGS_COMMON := -O3 -DNDEBUG -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DSTD_PRINT_OUTPUT
