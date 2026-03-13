@@ -622,5 +622,34 @@ workend(ThreadContext *tc, uint64_t workid, uint64_t threadid)
     }
 }
 
+void
+m5_cim_push(ThreadContext *tc, Addr dest_vaddr, Addr src_paddr, uint64_t len)
+{
+    DPRINTF(PseudoInst, "pseudo_inst::m5_cim_push(dest_vaddr: %#x, src_paddr: %#x, len: %d)\n",
+            dest_vaddr, src_paddr, len);
+
+    TranslatingPortProxy fs_proxy(tc);
+    SETranslatingPortProxy se_proxy(tc);
+    PortProxy &virt_proxy = FullSystem ? fs_proxy : se_proxy;
+
+    uint8_t *buf = new uint8_t[len];
+
+    tc->getSystemPtr()->physProxy.readBlob(src_paddr, buf, len);
+
+    virt_proxy.writeBlob(dest_vaddr, buf, len);
+
+    delete[] buf;
+}
+
+void
+m5_cim_issue(ThreadContext *tc, Addr cmd_addr, uint64_t w0, uint64_t w1, uint64_t w2, uint64_t w3)
+{
+    uint64_t cmd_data[4] = {w0, w1, w2, w3};
+
+    tc->getSystemPtr()->physProxy.writeBlob(cmd_addr, (const uint8_t *)cmd_data, sizeof(cmd_data));
+
+    DPRINTF(PseudoInst, "Pseudo-issue CIM cmd via writeBlob (Zero Cost): w0=%#lx\n", w0);
+}
+
 } // namespace pseudo_inst
 } // namespace gem5

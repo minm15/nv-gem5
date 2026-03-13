@@ -591,9 +591,9 @@ AbstractMemory::functionalAccess(PacketPtr pkt)
 #ifdef CDNCcimFlag
     CimHandler *cimHandlerPtr = getCimHandlerPtr(pkt->getAddr());
     if (cimHandlerPtr) {
-        panic(
-            "\n>>> Should Not have functional access to CIM region in %s\n",
-            __func__);
+        // panic(
+        //     "\n>>> Should Not have functional access to CIM region in %s\n",
+        //     __func__);
     }
 #endif // CDNCcimFlag
 

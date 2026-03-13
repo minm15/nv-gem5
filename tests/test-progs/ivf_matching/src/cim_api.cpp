@@ -385,6 +385,87 @@ CimModule::copy_to_cim(uint16_t bank,
     std::memcpy(dest, cpu_array, size_in_byte);
 }
 
+// void
+// CimModule::copy_to_cpu(void *cpu_array,
+//                        uint16_t bank,
+//                        uint16_t mat,
+//                        uint16_t array,
+//                        uint16_t row,
+//                        size_t size_in_byte)
+// {
+//     checkGeometryReady();
+
+//     assert(cpu_array != nullptr);
+//     assert(readWriteAddress != nullptr);
+//     assert(size_in_byte == (1ull << columnBits));
+
+//     const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
+//     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+
+//     const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+//     std::memcpy(cpu_array, src, size_in_byte);
+// }
+
+// void
+// CimModule::copy_temp_to_cpu(void *cpu_array,
+//                             uint16_t bank,
+//                             uint16_t mat,
+//                             uint16_t array,
+//                             uint16_t row,
+//                             size_t size_in_byte)
+// {
+//     checkGeometryReady();
+
+//     assert(cpu_array != nullptr);
+//     assert(tempAddress != nullptr);
+//     assert(size_in_byte == (1ull << columnBits));
+
+//     const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
+//     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+//     const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+//     std::memcpy(cpu_array, src, size_in_byte);
+// }
+
+// void
+// CimModule::copy_temp_block_to_cpu(void *cpu_array,
+//                                   uint16_t bank,
+//                                   uint16_t mat,
+//                                   uint16_t array,
+//                                   uint16_t start_row,
+//                                   size_t num_rows)
+// {
+//     checkGeometryReady();
+
+//     assert(cpu_array != nullptr);
+//     assert(tempAddress != nullptr);
+//     assert(num_rows > 0);
+
+//     const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
+//     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, start_row);
+    
+//     const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+    
+//     size_t row_size = (1ull << columnBits);
+//     size_t total_size = num_rows * row_size;
+
+//     std::memcpy(cpu_array, src, total_size);
+// }
+
+void
+CimModule::do_pseudo_push(void *dest_vaddr, uintptr_t src_paddr, size_t size) const
+{
+    register uint64_t reg0 asm("x0") = reinterpret_cast<uintptr_t>(dest_vaddr);
+    register uint64_t reg1 asm("x1") = static_cast<uint64_t>(src_paddr);
+    register uint64_t reg2 asm("x2") = static_cast<uint64_t>(size);
+
+    __asm__ __volatile__ (
+        ".inst 0xff560110\n\t"
+        : "+r" (reg0) 
+        : "r" (reg0), "r" (reg1), "r" (reg2)
+        : "memory"
+    );
+}
+
 void
 CimModule::copy_to_cpu(void *cpu_array,
                        uint16_t bank,
@@ -394,16 +475,13 @@ CimModule::copy_to_cpu(void *cpu_array,
                        size_t size_in_byte)
 {
     checkGeometryReady();
-
     assert(cpu_array != nullptr);
     assert(readWriteAddress != nullptr);
-    assert(size_in_byte == (1ull << columnBits));
 
     const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
-
-    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
-    std::memcpy(cpu_array, src, size_in_byte);
+    
+    do_pseudo_push(cpu_array, base + offs, size_in_byte);
 }
 
 void
@@ -415,15 +493,13 @@ CimModule::copy_temp_to_cpu(void *cpu_array,
                             size_t size_in_byte)
 {
     checkGeometryReady();
-
     assert(cpu_array != nullptr);
     assert(tempAddress != nullptr);
-    assert(size_in_byte == (1ull << columnBits));
 
     const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
-    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
-    std::memcpy(cpu_array, src, size_in_byte);
+    
+    do_pseudo_push(cpu_array, base + offs, size_in_byte);
 }
 
 void
@@ -435,24 +511,17 @@ CimModule::copy_temp_block_to_cpu(void *cpu_array,
                                   size_t num_rows)
 {
     checkGeometryReady();
-
     assert(cpu_array != nullptr);
     assert(tempAddress != nullptr);
     assert(num_rows > 0);
 
-    // 計算記憶體起始位置
     const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
-    // 計算 start_row 的偏移量
     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, start_row);
     
-    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
-    
-    // 計算總大小 = 行數 * 每行位元組數
     size_t row_size = (1ull << columnBits);
     size_t total_size = num_rows * row_size;
 
-    // 一次搬運整塊連續記憶體
-    std::memcpy(cpu_array, src, total_size);
+    do_pseudo_push(cpu_array, base + offs, total_size);
 }
 
 void
@@ -472,13 +541,45 @@ CimModule::CommandEncode::print()
     printf("------\n");
 }
 
+// void
+// CimModule::CommandEncode::issue()
+// {
+//     uint64_t w0 = 0;
+//     uint64_t w1 = 0;
+//     uint64_t w2 = 0;
+//     uint64_t w3 = 0;
+
+//     w0 |= (static_cast<uint64_t>(operation_type))      << 56;
+//     w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
+//     w0 |= (static_cast<uint64_t>(byte_mask))           << 40;
+//     w0 |= (static_cast<uint64_t>(dest))                << 16;
+//     w0 |= (static_cast<uint64_t>(bank_mask16))         << 0;
+
+//     w1 = column_mask;
+
+//     if ((operation_type % 0x80u) < 3) {
+//         w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
+//         w2 |= (static_cast<uint64_t>(row_number[1])) << 16;
+//         w2 |= (static_cast<uint64_t>(row_number[2])) << 32;
+//         w2 |= (static_cast<uint64_t>(row_number[3])) << 48;
+//     } else {
+//         w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
+//     }
+
+//     w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
+//     w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
+
+//     volatile uint64_t *ca = commandAddress;
+//     ca[1] = w1;
+//     ca[2] = w2;
+//     ca[3] = w3;
+//     ca[0] = w0;
+// }
+
 void
 CimModule::CommandEncode::issue()
 {
-    uint64_t w0 = 0;
-    uint64_t w1 = 0;
-    uint64_t w2 = 0;
-    uint64_t w3 = 0;
+    uint64_t w0 = 0, w1 = 0, w2 = 0, w3 = 0;
 
     w0 |= (static_cast<uint64_t>(operation_type))      << 56;
     w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
@@ -500,11 +601,16 @@ CimModule::CommandEncode::issue()
     w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
     w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
 
-    volatile uint64_t *ca = commandAddress;
-    ca[1] = w1;
-    ca[2] = w2;
-    ca[3] = w3;
-    __sync_synchronize();
-    ca[0] = w0;
-    __sync_synchronize();
+    register uint64_t x0 asm("x0") = reinterpret_cast<uintptr_t>(commandAddress);
+    register uint64_t x1 asm("x1") = w0;
+    register uint64_t x2 asm("x2") = w1;
+    register uint64_t x3 asm("x3") = w2;
+    register uint64_t x4 asm("x4") = w3;
+
+    __asm__ __volatile__ (
+        ".inst 0xff570110\n\t"
+        : "+r" (x0)
+        : "r" (x0), "r" (x1), "r" (x2), "r" (x3), "r" (x4)
+        : "memory"
+    );
 }

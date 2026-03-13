@@ -30,6 +30,7 @@ CimHandler::CimHandler(const CimHandlerParams &params)
       operationsOnPredecoderLatency(params.operations_on_Predecoder_latency),
       operationsOnRowDecoderLatency(params.operations_on_Row_decoder_latency),
       operationsOnColumnLatency(params.operations_on_Column_latency),
+      stats(this),
       cimOperationHandler(params.cim_operation_handler)
 {
     DPRINTF(CIMDBG, "CimHandler Constructed! this_ptr: %p\n", this);
@@ -50,6 +51,13 @@ CimHandler::CimHandler(const CimHandlerParams &params)
     }
 
     opInitLat = params.operations_init_latency;
+}
+
+CimHandler::CimStats::CimStats(statistics::Group *parent)
+    : statistics::Group(parent),
+      ADD_STAT(orOpCount, statistics::units::Count::get(), 
+               "Number of CIM OR operations executed")
+{
 }
 
 CimHandler::~CimHandler()
@@ -157,6 +165,12 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
         row_mask = 0xffffull;
     } else {
         row_mask = (1ull << numRowBits) - 1ull;
+    }
+
+    uint8_t opType = command.operation_type;
+    if (static_cast<OperationType>(opType) == OperationType::OR || 
+        static_cast<OperationType>(opType) == OperationType::short_OR) {
+        stats.orOpCount++;
     }
 
     for (size_t bank = 0; bank < numBanks; bank++) {
@@ -381,12 +395,6 @@ CimHandler::cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &comma
     }
 }
 
-/*
-std::vector<Tick> operationsOnHTreeLatency;
-std::vector<Tick> operationsOnPredecoderLatency;
-std::vector<Tick> operationsOnRowDecoderLatency;
-std::vector<Tick> operationsOnColumnLatency;
-*/
 void
 CimHandler::cimUpdateLatencyTable(bool init, uint8_t operation, size_t bank)
 {

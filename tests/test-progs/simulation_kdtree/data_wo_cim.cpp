@@ -29,7 +29,7 @@ struct IVFIndex {
     uint32_t Nmap = 0;
 
     float alpha = 1.0f;
-    float beta  = 1.0f;
+    float beta  = 5.0f;
     uint32_t flags = 0; // bit0: use_idf
 
     // arrays

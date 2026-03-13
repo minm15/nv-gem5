@@ -83,6 +83,12 @@ class CimHandler : public SimObject
     // statistics::Scalar cimOpCmdCount;
     // Tick unionBusyUntil = 0;
 
+    struct CimStats : public statistics::Group
+    {
+        CimStats(statistics::Group *parent);
+        statistics::Scalar orOpCount;
+    } stats;
+
     void cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &command);
     void cimUpdateLatencyTable(bool init, uint8_t operation, size_t bank);
 

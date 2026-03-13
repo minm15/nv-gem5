@@ -1244,7 +1244,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
 
     if (pkt->req) {
         const Addr a = pkt->getAddr();
-        if (a >= 0x10000000 && a <= 0x18000000) {
+        if (a >= 0x10000000 && a <= 0x22000000) {
             pkt->req->setFlags(pkt->req->getFlags() | Request::UNCACHEABLE);
 
             DPRINTF(Cache, "[UC_BYPASS] %s addr=%#lx cmd=%s tag_hit=%d -> FORCE_MISS\n",

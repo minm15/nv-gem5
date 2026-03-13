@@ -70,8 +70,8 @@
 // New Operation: non-volatile memory reset
 #define M5OP_NV_RESET           0x55
 
-#define M5OP_RESERVED1          0x56 // Reserved for user
-#define M5OP_RESERVED2          0x57 // Reserved for user
+#define M5OP_CIM_PUSH           0x56 // Reserved for user
+#define M5OP_CIM_ISSUE          0x57 // Reserved for user
 #define M5OP_RESERVED3          0x58 // Reserved for user
 #define M5OP_RESERVED4          0x59 // Reserved for user
 

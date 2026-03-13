@@ -19,17 +19,13 @@ OUT_CPU := bin/hello64-static-cpu
 CIM_API_SRC := src/cim_api.cpp
 
 APP_SRCS_CIM := \
-  src/bench_main.cpp \
-  src/workload_gen.cpp \
-  src/nvm_writer.cpp \
-  src/roi_match.cpp
+  src/test.cpp
 
 APP_SRCS_CPU := \
   src/cpu_main.cpp \
   src/cpu_match.cpp \
   src/workload_gen.cpp
 
-# --- Flags (固定 O3) ---
 CXXFLAGS_COMMON := -O3 -DNDEBUG -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DSTD_PRINT_OUTPUT
 CXXFLAGS_CIM    := $(CXXFLAGS_COMMON) -DinCIM=1
 CXXFLAGS_CPU    := $(CXXFLAGS_COMMON)

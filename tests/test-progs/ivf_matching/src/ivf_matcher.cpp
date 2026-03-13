@@ -597,10 +597,10 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             for (uint32_t g = 0; g < groups; ++g) {
                 MaskRow geo_xy{};
                 // no geo
-                geo_xy.fill(0xFF);
+                // geo_xy.fill(0xFF);
                 // with geo
-                // geo_eq_masks_xy(lid, g, qgx, qgy, geo_xy);
-                // if (!mask_any(geo_xy)) continue;
+                geo_eq_masks_xy(lid, g, qgx, qgy, geo_xy);
+                if (!mask_any(geo_xy)) continue;
 
                 uint16_t bank=0, mat=0, array=0;
                 map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);

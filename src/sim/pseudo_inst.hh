@@ -101,6 +101,9 @@ void m5Syscall(ThreadContext *tc);
 void togglesync(ThreadContext *tc);
 void triggerWorkloadEvent(ThreadContext *tc);
 void nvReset(ThreadContext *tc, int number);
+void m5_cim_push(ThreadContext *tc, Addr dest_vaddr, Addr src_paddr, uint64_t len);
+void m5_cim_issue(ThreadContext *tc, Addr cmd_addr, uint64_t w0, uint64_t w1, uint64_t w2, uint64_t w3);
+
 
 /**
  * Execute a decoded M5 pseudo instruction
@@ -224,8 +227,8 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
         invokeSimcall<ABI>(tc, nvReset);
         return true;
 
-      case M5OP_RESERVED1:
-      case M5OP_RESERVED2:
+      //case M5OP_RESERVED1:
+      //case M5OP_RESERVED2:
       case M5OP_RESERVED3:
       case M5OP_RESERVED4:
       //case M5OP_RESERVED5:
@@ -239,6 +242,14 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
 
       case M5OP_WORKLOAD:
         invokeSimcall<ABI>(tc, triggerWorkloadEvent);
+        return true;
+
+      case M5OP_CIM_PUSH: 
+        invokeSimcall<ABI>(tc, m5_cim_push);
+        return true;
+
+      case M5OP_CIM_ISSUE: 
+        invokeSimcall<ABI>(tc, m5_cim_issue);
         return true;
 
       default:

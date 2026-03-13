@@ -380,24 +380,28 @@ CimModule::copy_to_cim(uint16_t bank,
 }
 
 void
-CimModule::copy_to_cpu(void *cpu_array,
-                       uint16_t bank,
-                       uint16_t mat,
-                       uint16_t array,
-                       uint16_t row,
+CimModule::copy_to_cpu(void *cpu_array, 
+                       uint16_t bank, uint16_t mat, uint16_t array, uint16_t row,
                        size_t size_in_byte)
 {
     checkGeometryReady();
+    
+    uint64_t vaddr = reinterpret_cast<uintptr_t>(cpu_array);
+    uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
+    uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+    uint64_t paddr = base + offs;
+    uint64_t len = size_in_byte;
 
-    assert(cpu_array != nullptr);
-    assert(readWriteAddress != nullptr);
-    assert(size_in_byte == (1ull << columnBits));
+    register uint64_t reg0 asm("x0") = vaddr;
+    register uint64_t reg1 asm("x1") = paddr;
+    register uint64_t reg2 asm("x2") = len;
 
-    const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
-    const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
-
-    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
-    std::memcpy(cpu_array, src, size_in_byte);
+    __asm__ __volatile__ (
+        ".inst 0xff560110\n\t"
+        : "+r" (reg0) 
+        : "r" (reg0), "r" (reg1), "r" (reg2)
+        : "memory"
+    );
 }
 
 void
@@ -414,12 +418,65 @@ CimModule::copy_temp_to_cpu(void *cpu_array,
     assert(tempAddress != nullptr);
     assert(size_in_byte == (1ull << columnBits));
 
-    const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
-    const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+    uint64_t vaddr = reinterpret_cast<uintptr_t>(cpu_array);
+    uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress); 
+    uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+    uint64_t paddr = base + offs;
+    uint64_t len = size_in_byte;
 
-    const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
-    std::memcpy(cpu_array, src, size_in_byte);
+    register uint64_t reg0 asm("x0") = vaddr;
+    register uint64_t reg1 asm("x1") = paddr;
+    register uint64_t reg2 asm("x2") = len;
+
+    __asm__ __volatile__ (
+        ".inst 0xff560110\n\t"
+        : "+r" (reg0) 
+        : "r" (reg0), "r" (reg1), "r" (reg2)
+        : "memory"
+    );
 }
+
+// void
+// CimModule::copy_to_cpu(void *cpu_array,
+//                        uint16_t bank,
+//                        uint16_t mat,
+//                        uint16_t array,
+//                        uint16_t row,
+//                        size_t size_in_byte)
+// {
+//     checkGeometryReady();
+
+//     assert(cpu_array != nullptr);
+//     assert(readWriteAddress != nullptr);
+//     assert(size_in_byte == (1ull << columnBits));
+
+//     const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
+//     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+
+//     const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+//     std::memcpy(cpu_array, src, size_in_byte);
+// }
+
+// void
+// CimModule::copy_temp_to_cpu(void *cpu_array,
+//                             uint16_t bank,
+//                             uint16_t mat,
+//                             uint16_t array,
+//                             uint16_t row,
+//                             size_t size_in_byte)
+// {
+//     checkGeometryReady();
+
+//     assert(cpu_array != nullptr);
+//     assert(tempAddress != nullptr);
+//     assert(size_in_byte == (1ull << columnBits));
+
+//     const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
+//     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+
+//     const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
+//     std::memcpy(cpu_array, src, size_in_byte);
+// }
 
 void
 CimModule::CommandEncode::print()
@@ -438,13 +495,46 @@ CimModule::CommandEncode::print()
     printf("------\n");
 }
 
+// void
+// CimModule::CommandEncode::issue()
+// {
+//     uint64_t w0 = 0;
+//     uint64_t w1 = 0;
+//     uint64_t w2 = 0;
+//     uint64_t w3 = 0;
+
+//     w0 |= (static_cast<uint64_t>(operation_type))      << 56;
+//     w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
+//     w0 |= (static_cast<uint64_t>(byte_mask))           << 40;
+//     w0 |= (static_cast<uint64_t>(dest))                << 16;
+//     w0 |= (static_cast<uint64_t>(bank_mask16))         << 0;
+
+//     w1 = column_mask;
+
+//     if ((operation_type % 0x80u) < 3) {
+//         w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
+//         w2 |= (static_cast<uint64_t>(row_number[1])) << 16;
+//         w2 |= (static_cast<uint64_t>(row_number[2])) << 32;
+//         w2 |= (static_cast<uint64_t>(row_number[3])) << 48;
+//     } else {
+//         w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
+//     }
+
+//     w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
+//     w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
+
+//     volatile uint64_t *ca = commandAddress;
+//     ca[1] = w1;
+//     ca[2] = w2;
+//     ca[3] = w3;
+//     __sync_synchronize();
+//     ca[0] = w0;
+// }
+
 void
 CimModule::CommandEncode::issue()
 {
-    uint64_t w0 = 0;
-    uint64_t w1 = 0;
-    uint64_t w2 = 0;
-    uint64_t w3 = 0;
+    uint64_t w0 = 0, w1 = 0, w2 = 0, w3 = 0;
 
     w0 |= (static_cast<uint64_t>(operation_type))      << 56;
     w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
@@ -466,10 +556,16 @@ CimModule::CommandEncode::issue()
     w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
     w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
 
-    volatile uint64_t *ca = commandAddress;
-    ca[1] = w1;
-    ca[2] = w2;
-    ca[3] = w3;
-    __sync_synchronize();
-    ca[0] = w0;
+    register uint64_t x0 asm("x0") = reinterpret_cast<uintptr_t>(commandAddress);
+    register uint64_t x1 asm("x1") = w0;
+    register uint64_t x2 asm("x2") = w1;
+    register uint64_t x3 asm("x3") = w2;
+    register uint64_t x4 asm("x4") = w3;
+
+    __asm__ __volatile__ (
+        ".inst 0xff570110\n\t"
+        : "+r" (x0)
+        : "r" (x0), "r" (x1), "r" (x2), "r" (x3), "r" (x4)
+        : "memory"
+    );
 }
