@@ -175,6 +175,14 @@ class CimModule
         uint16_t array,
         uint16_t row,
         size_t size_in_byte);
+
+    void copy_temp_block_to_cpu(
+        void *cpu_array,
+        uint16_t bank,
+        uint16_t mat,
+        uint16_t array,
+        uint16_t start_row,
+        size_t num_rows);
 };
 
 #endif // __CIM_API__HPP__

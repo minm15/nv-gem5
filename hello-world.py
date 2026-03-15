@@ -164,6 +164,7 @@ system.cpu.createInterruptController()
 # --- Binary ---
 # binary = "./tests/test-progs/matching_simulation/bin/matching_sim"
 binary = "./tests/test-progs/ivf_matching/bin/ivf_sim"
+# binary = "./tests/test-progs/ivf_matching/verify_bin/ivf_verify"
 # binary = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/cim/bin/hello64-static"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
 

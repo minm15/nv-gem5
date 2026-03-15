@@ -14,6 +14,9 @@ DOCKCROSS_IMAGE ?= dockcross/linux-arm64:latest
 # --- Outputs ---
 OUT_CIM  := bin/ivf_sim
 OUT_TEST := ivf_bank_check
+VERIFY_OUT_DIR := verify_bin
+OUT_VERIFY := $(VERIFY_OUT_DIR)/ivf_verify
+OUT_GENDATA := $(VERIFY_OUT_DIR)/gen_ivf_testdata
 
 # --- Sources ---
 CIM_API_SRC := src/cim_api.cpp
@@ -42,15 +45,32 @@ APP_SRCS_TEST := \
   src/msim_bins.cpp \
   src/map_loader.cpp
 
+APP_SRCS_VERIFY := \
+  src/ivf_verify.cpp \
+  src/file_utils.cpp \
+  src/bin_reader.cpp \
+  src/msim_json.cpp \
+  src/map_loader.cpp \
+  src/query_loader.cpp \
+  src/layout.cpp \
+  src/msim_bins.cpp \
+  src/ivf_layout.cpp \
+  src/ivf_map_writer.cpp \
+  src/ivf_matcher.cpp \
+  src/ivf_cpu_reference.cpp
+
 # --- Flags ---
 CXXFLAGS_COMMON := -O3 -DNDEBUG -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DSTD_PRINT_OUTPUT
 CXXFLAGS_CIM    := $(CXXFLAGS_COMMON) -DinCIM=1
 CXXFLAGS_TEST   := -O2 -DNDEBUG -Iinclude -std=gnu++17
+CXXFLAGS_VERIFY := $(CXXFLAGS_CIM) \
+	-DMSIM_MAP_DIR=\"$(abspath test/map)\" \
+	-DMSIM_QUERY_DIR=\"$(abspath test/query)\"
 
 LDFLAGS := -static
 LDLIBS  := $(M5_LIB_CONT)
 
-.PHONY: all m5lib cim test clean
+.PHONY: all m5lib cim test verify verify-data clean
 
 all: cim
 
@@ -85,6 +105,22 @@ test:
 	@mkdir -p bin
 	@echo "[build-host] ivf_bank_check -> $(OUT_TEST)"
 	@$(HOST_CXX) $(CXXFLAGS_TEST) $(APP_SRCS_TEST) -o $(OUT_TEST)
+
+verify-data:
+	@mkdir -p $(VERIFY_OUT_DIR)
+	@echo "[build-host] gen_ivf_testdata -> $(OUT_GENDATA)"
+	@$(HOST_CXX) -O2 -DNDEBUG -std=gnu++17 src/gen_ivf_testdata.cpp -o $(OUT_GENDATA)
+	@echo "[run-host] generating deterministic verifier data"
+	@./$(OUT_GENDATA)
+
+verify: verify-data
+	docker run --rm \
+	  -v "$(GEM5_ROOT)":/work \
+	  -w $(WORKDIR_CONT) \
+	  $(DOCKCROSS_IMAGE) \
+	  bash -lc 'set -e; mkdir -p $(VERIFY_OUT_DIR); $(ENSURE_M5LIB); \
+	    echo "[build] ivf_verify -> $(OUT_VERIFY)"; \
+	    $$CXX $(CXXFLAGS_VERIFY) $(CIM_API_SRC) $(APP_SRCS_VERIFY) -o $(OUT_VERIFY) $(LDFLAGS) $(LDLIBS)'
 
 clean:
 	rm -rf bin

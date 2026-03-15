@@ -1,6 +1,7 @@
 #include "ivf_matcher.hpp"
 #include "layout.hpp"
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -22,7 +23,6 @@ struct MatWork {
     uint32_t array_mask;
     size_t job_begin;   // index into jobs_per_q[qid]
     size_t job_end;     // [begin, end)
-    int dim;            // 0..kDescDims
 };
 
 static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b)
@@ -37,9 +37,9 @@ static inline uint8_t clamp_u8(int v, int lo, int hi)
     return static_cast<uint8_t>(v);
 }
 
-// ---- GEO block-copy helper: batch compute eq masks for multiple candidate values on one axis ----
-// 每個 candidate value 需要 2 個 temp rows (lo/hi nibble mismatch)
-// 會一次 OR 寫到 temp 連續 rows，再用 copy_temp_block_to_cpu 一次讀回。
+// Batch-compute equality masks for multiple candidate values on one axis.
+// Each candidate uses two temp rows (low/high nibble mismatch).
+// The helper writes the rows contiguously, then pulls them back in one block copy.
 static inline void geo_batch_eq_masks_axis_block(
     CimModule& cim,
     const msim::IvfPlacement& place,
@@ -48,7 +48,7 @@ static inline void geo_batch_eq_masks_axis_block(
     bool is_x,
     const std::vector<uint8_t>& vals,
     std::vector<msim::IvfMatcher::MaskRow>& out_eq_masks,
-    uint16_t temp_base_row // 這段 batch 使用的 temp 起始 row
+    uint16_t temp_base_row
 ) {
     using MaskRow = msim::IvfMatcher::MaskRow;
 
@@ -57,8 +57,7 @@ static inline void geo_batch_eq_masks_axis_block(
 
     if (vals.empty()) return;
 
-    // 避免踩到你 desc 用的 temp (你目前 desc base=64)
-    // 這裡要求：temp_base_row + 2*vals.size() <= 64
+    // Keep geo temp rows separate from descriptor temp rows.
     const uint16_t need_rows = static_cast<uint16_t>(2u * vals.size());
     if (temp_base_row + need_rows > 64) {
         throw std::runtime_error("geo_batch_eq_masks_axis_block: temp rows exceed [0,63] region");
@@ -70,7 +69,8 @@ static inline void geo_batch_eq_masks_axis_block(
     std::vector<uint16_t> rows;
     rows.reserve(4);
 
-    // (A) 對每個 val：做兩次 OR，分別寫到 temp_base + 2*i, 2*i+1
+    // A. For each candidate value, issue two ORs and write them to temp rows
+    //    temp_base + 2*i and temp_base + 2*i + 1.
     for (size_t i = 0; i < vals.size(); ++i) {
         const uint8_t v  = vals[i];
         const uint8_t lo = static_cast<uint8_t>(v & 0x0Fu);
@@ -102,11 +102,11 @@ static inline void geo_batch_eq_masks_axis_block(
                    CimModule::Mask::array(array));
         };
 
-        issue_nibble(false, lo, static_cast<uint16_t>(temp_base_row + 2u * i + 0u)); // mis_lo
-        issue_nibble(true,  hi, static_cast<uint16_t>(temp_base_row + 2u * i + 1u)); // mis_hi
+        issue_nibble(false, lo, static_cast<uint16_t>(temp_base_row + 2u * i + 0u));
+        issue_nibble(true,  hi, static_cast<uint16_t>(temp_base_row + 2u * i + 1u));
     }
 
-    // (B) 一次 block copy：把 2*vals.size() 個 rows 全讀回 CPU
+    // B. Read back the full temp block in one transfer.
     std::vector<uint8_t> block;
     block.resize(static_cast<size_t>(need_rows) * static_cast<size_t>(kRowBytes));
 
@@ -115,7 +115,7 @@ static inline void geo_batch_eq_masks_axis_block(
                                temp_base_row,
                                static_cast<size_t>(need_rows));
 
-    // (C) 組合成 eq_byte = ~mis_lo & ~mis_hi
+    // C. Combine the low/high mismatch rows into a byte-level equality mask.
     for (size_t i = 0; i < vals.size(); ++i) {
         const uint8_t* mis_lo = block.data() + (static_cast<size_t>(2u * i + 0u) * kRowBytes);
         const uint8_t* mis_hi = block.data() + (static_cast<size_t>(2u * i + 1u) * kRowBytes);
@@ -322,7 +322,7 @@ IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(uint32_t bucket_id, uint32_t gr
 
         MaskRow tmp{};
         cim_.copy_temp_to_cpu(tmp.data(), bank, mat, array, 0, kRowBytes);
-        return tmp; // mismatch mask
+        return tmp;
     };
 
     MaskRow mis_lo = or_nibble_mismatch(false, lo);
@@ -339,10 +339,10 @@ void IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
 {
     out_mask_xy.fill(0);
 
-    // geo temp 用 [0,63]，desc 你已經用 base=64 以上
+    // Use temp rows [0,63] for geo, and keep descriptor temp rows above that.
     static constexpr uint16_t kGeoTempBase = 0;
 
-    // ---- 1) 先算固定軸：my(qgy)、mx(qgx) 各一次 ----
+    // 1. Fixed-axis masks for the query center.
     std::vector<uint8_t> one_val;
 
     MaskRow my_fixed{};
@@ -363,7 +363,7 @@ void IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
         mx_fixed = eqs[0];
     }
 
-    // ---- 2) dx 探索：gx 變動、gy 固定 ----
+    // 2. Sweep x around the query location while y stays fixed.
     std::vector<uint8_t> gx_vals;
     gx_vals.reserve(static_cast<size_t>(2 * kGeoProbeRadius + 1));
     for (int dx = -kGeoProbeRadius; dx <= kGeoProbeRadius; ++dx) {
@@ -380,7 +380,7 @@ void IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
         mask_or_inplace(out_mask_xy, tmp);
     }
 
-    // ---- 3) dy 探索：gy 變動、gx 固定 ----
+    // 3. Sweep y around the query location while x stays fixed.
     std::vector<uint8_t> gy_vals;
     gy_vals.reserve(static_cast<size_t>(2 * kGeoProbeRadius + 1));
     for (int dy = -kGeoProbeRadius; dy <= kGeoProbeRadius; ++dy) {
@@ -403,7 +403,7 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
 {
     out_planes.clear();
 
-    // 避開 geo 使用的 temp_row=0
+    // Keep descriptor temp rows away from geo temp rows.
     static constexpr uint16_t kDescTempBase = 64;
 
     uint16_t bank = 0, mat = 0, array = 0;
@@ -412,7 +412,8 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
     std::vector<uint16_t> rows;
     rows.reserve(kDescBits);
 
-    // (A) 64 dims：OR 寫到 temp 的連續 64 rows
+    // A. Issue one OR per descriptor dimension and store the results in
+    //    consecutive temp rows.
     for (int d = 0; d < kDescDims; ++d) {
         rows.clear();
         const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
@@ -427,12 +428,12 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
                 0xffu,
                 CimModule::Mask::bank(bank),
                 CimModule::Mask::colsAll(),
-                static_cast<uint16_t>(kDescTempBase + d),  // <<<<<<<<<<<< 這裡變動
+                static_cast<uint16_t>(kDescTempBase + d),
                 CimModule::Mask::mat(mat),
                 CimModule::Mask::array(array));
     }
 
-    // (B) 一次 block copy 回 CPU：64 rows
+    // B. Read back the 64 temp rows in one transfer.
     std::vector<uint8_t> block;
     block.resize(static_cast<size_t>(kDescDims) * static_cast<size_t>(kRowBytes));
 
@@ -441,144 +442,63 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
                                 kDescTempBase,
                                 static_cast<size_t>(kDescDims));
 
-    // (C) ripple-carry 累積 64 rows
+    // C. Accumulate the 64 mismatch rows with the bit-sliced adder.
     for (int d = 0; d < kDescDims; ++d) {
         const uint8_t* row_ptr = block.data() + static_cast<size_t>(d) * kRowBytes;
         out_planes.add_mask_row_bytes(row_ptr);
     }
 }
 
-// MatchResult IvfMatcher::match_one_query_desc(uint8_t qgx, uint8_t qgy, const uint8_t* qdesc64, uint32_t nprobe, uint32_t max_groups_per_list)
-// {
-//     MatchResult best;
-//     const uint32_t K = map_.postings.nlist;
-//     if (K == 0) return best;
-
-//     const std::vector<uint32_t> lists = select_lists_cpu(qdesc64, nprobe);
-
-//     // -------- Phase 1: 收集需要做 desc 的 groups（先做 geo filter）--------
-//     std::vector<DescJob> jobs;
-//     jobs.reserve(lists.size() * 4); // 粗略估
-
-//     for (uint32_t lid : lists) {
-//         const auto& bp = place_.bucket.at(lid);
-//         const uint32_t groups_total = bp.desc_groups;
-//         const uint32_t groups = (max_groups_per_list == 0u)
-//             ? groups_total
-//             : std::min<uint32_t>(groups_total, max_groups_per_list);
-
-//         for (uint32_t g = 0; g < groups; ++g) {
-//             MaskRow geo_xy{};
-//             geo_eq_masks_xy(lid, g, qgx, qgy, geo_xy);
-//             if (!mask_any(geo_xy)) continue;
-
-//             uint16_t bank=0, mat=0, array=0;
-//             map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);
-
-//             jobs.push_back(DescJob{lid, g, bank, mat, array, geo_xy});
-//         }
-//     }
-
-//     if (jobs.empty()) return best;
-
-//     // -------- Phase 2: 依 (bank,mat) 分組，對同一組用 array_mask 做 lockstep OR --------
-//     std::sort(jobs.begin(), jobs.end(), [](const DescJob& a, const DescJob& b){
-//         if (a.bank != b.bank) return a.bank < b.bank;
-//         if (a.mat  != b.mat)  return a.mat  < b.mat;
-//         return a.array < b.array;
-//     });
-
-//     // 對每個 job 建一個 Planes（最後用來 lane_value）
-//     std::vector<Planes> planes_of_job(jobs.size());
-//     for (auto& p : planes_of_job) p.clear();
-
-//     std::vector<uint16_t> rows;
-//     rows.reserve(kDescBits);
-
-//     // 走訪每一個 (bank,mat) group
-//     for (size_t base = 0; base < jobs.size(); ) {
-//         const uint16_t bank = jobs[base].bank;
-//         const uint16_t mat  = jobs[base].mat;
-
-//         size_t end = base;
-//         uint32_t array_mask = 0;
-//         while (end < jobs.size() && jobs[end].bank == bank && jobs[end].mat == mat) {
-//             array_mask |= CimModule::Mask::array(jobs[end].array);
-//             ++end;
-//         }
-
-//         // 對這個 (bank,mat) 做 64 個 dim 的 OR（一次 OR 覆蓋多個 arrays）
-//         for (int d = 0; d < kDescDims; ++d) {
-//             rows.clear();
-//             const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
-
-//             for (int b = 0; b < kDescBits; ++b) {
-//                 const int qbit = (qv >> b) & 1u;
-//                 const uint16_t r = (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
-//                 rows.push_back(r);
-//             }
-
-//             cim_.OR(rows,
-//                     0xffu,
-//                     CimModule::Mask::bank(bank),
-//                     CimModule::Mask::colsAll(),
-//                     /*temp_row=*/0,
-//                     CimModule::Mask::mat(mat),
-//                     array_mask);
-
-//             // OR 後：每個 array 各自把 temp 讀回來，更新自己的 planes
-//             for (size_t i = base; i < end; ++i) {
-//                 MaskRow tmp{};
-//                 cim_.copy_temp_to_cpu(tmp.data(), bank, mat, jobs[i].array, 0, kRowBytes);
-//                 planes_of_job[i].add_mask(tmp);
-//             }
-//         }
-
-//         // 有了 planes 後，逐 job 做 lane 掃描（沿用你原本的邏輯）
-//         for (size_t i = base; i < end; ++i) {
-//             const auto& jb = jobs[i];
-//             const auto& bp = place_.bucket.at(jb.lid);
-
-//             const uint32_t base_off = bp.posting_off + jb.g * static_cast<uint32_t>(kLanesPerGroup);
-//             const uint32_t remain   = bp.map_count > jb.g * static_cast<uint32_t>(kLanesPerGroup)
-//                                     ? (bp.map_count - jb.g * static_cast<uint32_t>(kLanesPerGroup))
-//                                     : 0u;
-//             const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
-
-//             for (uint32_t lane = 0; lane < valid; ++lane) {
-//                 if (lane_get_bit(jb.geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
-
-//                 const int32_t mid = map_.postings.map_ids.at(static_cast<size_t>(base_off + lane));
-//                 const uint32_t mis = planes_of_job[i].lane_value(static_cast<int>(lane));
-
-//                 if (mis < best.best_mismatch || (mis == best.best_mismatch && mid < best.best_map_id)) {
-//                     best.best_mismatch = static_cast<uint8_t>(mis);
-//                     best.best_map_id = mid;
-//                 }
-//             }
-//         }
-
-//         base = end;
-//     }
-
-//     return best;
-// }
+MatchResult IvfMatcher::match_one_query_desc(uint8_t qgx, uint8_t qgy,
+                                             const uint8_t* qdesc64,
+                                             uint32_t nprobe,
+                                             uint32_t max_groups_per_list)
+{
+    const auto results = match_one_step(qgx, qgy, qdesc64, 1, nprobe, max_groups_per_list);
+    return results.empty() ? MatchResult{} : results.front();
+}
 
 std::vector<MatchResult>
 IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                            const uint8_t* desc_ptr, size_t m,
                            uint32_t nprobe, uint32_t max_groups_per_list)
 {
-    // 固定 16 banks (BANK_BITS=4)
+    // The current placement uses 16 banks (BANK_BITS=4).
     static constexpr uint16_t kNumBanks = 16;
+    static constexpr uint16_t kDescTempBase = 64;
 
     std::vector<MatchResult> results(m);
+    if (m == 0) return results;
 
-    // ---- per-query: jobs + planes ----
+    const uint32_t K = map_.postings.nlist;
+    std::vector<uint32_t> geo_group_base(static_cast<size_t>(K) + 1u, 0u);
+    for (uint32_t lid = 0; lid < K; ++lid) {
+        geo_group_base[static_cast<size_t>(lid) + 1u] =
+            geo_group_base[static_cast<size_t>(lid)] + place_.bucket.at(lid).desc_groups;
+    }
+
+    const uint32_t total_geo_groups = geo_group_base.back();
+    std::vector<MaskRow> geo_masks(total_geo_groups);
+    std::vector<uint8_t> geo_ready(total_geo_groups, 0u);
+
+    auto geo_index = [&](uint32_t lid, uint32_t group_in_bucket) -> uint32_t {
+        return geo_group_base[static_cast<size_t>(lid)] + group_in_bucket;
+    };
+
+    auto get_geo_mask = [&](uint32_t lid, uint32_t group_in_bucket) -> const MaskRow& {
+        const uint32_t idx = geo_index(lid, group_in_bucket);
+        if (geo_ready[idx] == 0u) {
+            geo_eq_masks_xy(lid, group_in_bucket, qgx, qgy, geo_masks[idx]);
+            geo_ready[idx] = 1u;
+        }
+        return geo_masks[idx];
+    };
+
+    // Per-query work queues and bit-sliced accumulators.
     std::vector<std::vector<DescJob>> jobs_per_q(m);
     std::vector<std::vector<Planes>>  planes_per_q(m);
 
-    // ============ Phase 1: 建 jobs（含 geo filter）============
+    // Phase 1. Build jobs after list selection and geo filtering.
     for (size_t qi = 0; qi < m; ++qi) {
         const uint8_t* qdesc64 = desc_ptr + qi * 64u;
 
@@ -595,11 +515,7 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 : std::min<uint32_t>(groups_total, max_groups_per_list);
 
             for (uint32_t g = 0; g < groups; ++g) {
-                MaskRow geo_xy{};
-                // no geo
-                // geo_xy.fill(0xFF);
-                // with geo
-                geo_eq_masks_xy(lid, g, qgx, qgy, geo_xy);
+                const MaskRow& geo_xy = get_geo_mask(lid, g);
                 if (!mask_any(geo_xy)) continue;
 
                 uint16_t bank=0, mat=0, array=0;
@@ -611,12 +527,12 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             }
         }
 
-        // planes size 跟 jobs 一樣
+        // Keep one accumulator per job.
         planes_per_q[qi].resize(jobs.size());
         for (auto& p : planes_per_q[qi]) p.clear();
     }
 
-    // ============ Phase 2: 對每個 query 形成 MatWork，丟進 bank queue ============
+    // Phase 2. Group each query into bank/mat work items.
     std::array<std::deque<MatWork>, kNumBanks> bank_q{};
     size_t total_work_items = 0;
 
@@ -630,7 +546,7 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             return a.array < b.array;
         });
 
-        // 建立每段 (bank,mat) 的 work
+        // Create one work item for each contiguous (bank, mat) segment.
         for (size_t base = 0; base < jobs.size(); ) {
             const uint16_t bank = jobs[base].bank;
             const uint16_t mat  = jobs[base].mat;
@@ -642,7 +558,6 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 ++end;
             }
 
-            // bank 必須在 0..15
             if (bank >= kNumBanks) {
                 throw std::runtime_error("match_one_step: bank out of range (expect 0..15)");
             }
@@ -651,8 +566,7 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 static_cast<uint32_t>(qi),
                 bank, mat,
                 array_mask,
-                base, end,
-                0
+                base, end
             });
             total_work_items++;
 
@@ -661,39 +575,22 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     }
 
     if (total_work_items == 0) {
-        return results; // 全都沒有通過 geo filter
+        return results;
     }
 
-    // 共用 rows buffer（每次 issue 會重建）
+    // Reuse a shared row buffer while issuing commands.
     std::vector<uint16_t> rows;
     rows.reserve(kDescBits);
 
-    // ============ Phase 3: Round-robin issue（bank-level interleaving, Route-1 block temp read）============
-    //
-    // Route-1: 對每個 MatWork (=同一個 qid + bank + mat + array_mask + job range)
-    //   1) 連續 issue 64 dims，把每個 dim 的 OR 結果寫到 temp 的連續 64 rows
-    //      temp_row = kDescTempBase + d
-    //   2) 對這個 work 範圍內出現的每個 array：一次 copy_temp_block_to_cpu 讀回 64 rows
-    //   3) 把這 64 rows 餵給該 array 的所有 jobs 對應的 planes（Planes::add_mask_bytes）
-    //   4) 做 lane scan 更新 results[qid]
-    //
-    // 注意：你要先在檔案某處定義 kDescTempBase（避免和 geo temp_row=0 撞）
-    // 例如：static constexpr uint16_t kDescTempBase = 64;
-
-    static constexpr uint16_t kDescTempBase = 64;
-
-    // 共用：把 jobs[i].array 分組用的暫存（避免每次 new 太多）
-    std::vector<uint16_t> uniq_arrays;
-    uniq_arrays.reserve(32);
-
-    // 每個 array 對應哪些 job indices（用平行陣列存，避免 unordered_map）
-    std::vector<uint16_t> arr_ids;
-    std::vector<std::vector<size_t>> arr_jobs;
-
-    // 64 rows block buffer（每 row kRowBytes）
+    // Phase 3. Round-robin issue across banks:
+    //   1. Issue OR commands for all active descriptor dimensions in one work item.
+    //   2. Read back the 64 temp rows once per array.
+    //   3. Feed the rows into the per-job bit-sliced accumulators.
+    //   4. Scan the valid lanes and update the best result.
     std::vector<uint8_t> block64(static_cast<size_t>(kDescDims) * kRowBytes);
 
-    // Round-robin：一次處理一個 MatWork（完成 64 dim + 1 次 block copy）
+    const int32_t* const map_ids = map_.postings.map_ids.data();
+
     while (total_work_items > 0) {
         for (uint16_t bank = 0; bank < kNumBanks; ++bank) {
             if (bank_q[bank].empty()) continue;
@@ -707,7 +604,7 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             auto& jobs   = jobs_per_q[qid];
             auto& planes = planes_per_q[qid];
 
-            // ---- (A) issue 64 dims：每個 dim 寫到 temp_row = kDescTempBase + d ----
+            // A. Issue one OR per non-zero descriptor dimension.
             for (int d = 0; d < kDescDims; ++d) {
                 if (qdesc64[d] == 0) continue;
                 rows.clear();
@@ -728,63 +625,38 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                         w.array_mask);
             }
 
-            // ---- (B) 建立「array -> jobs indices」分組（只看這個 work 的 job range）----
-            uniq_arrays.clear();
-            arr_ids.clear();
-            arr_jobs.clear();
-
-            // 先收 uniq arrays（保持小規模，O(n^2) ok；你每個 work 通常不會太多 jobs）
-            for (size_t ji = w.job_begin; ji < w.job_end; ++ji) {
-                const uint16_t a = jobs[ji].array;
-                bool seen = false;
-                for (uint16_t x : uniq_arrays) {
-                    if (x == a) { seen = true; break; }
+            // B. Arrays are already contiguous inside a (bank, mat) work item because
+            //    jobs were sorted by bank, mat, array.
+            for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
+                const uint16_t array = jobs[arr_begin].array;
+                size_t arr_end = arr_begin + 1;
+                while (arr_end < w.job_end && jobs[arr_end].array == array) {
+                    ++arr_end;
                 }
-                if (!seen) uniq_arrays.push_back(a);
-            }
 
-            arr_ids = uniq_arrays;
-            arr_jobs.resize(arr_ids.size());
-
-            for (size_t ji = w.job_begin; ji < w.job_end; ++ji) {
-                const uint16_t a = jobs[ji].array;
-                for (size_t k = 0; k < arr_ids.size(); ++k) {
-                    if (arr_ids[k] == a) {
-                        arr_jobs[k].push_back(ji);
-                        break;
-                    }
-                }
-            }
-
-            // ---- (C) per array：一次 block copy 64 rows，餵給該 array 的所有 planes ----
-            for (size_t k = 0; k < arr_ids.size(); ++k) {
-                const uint16_t array = arr_ids[k];
-
-                // 把 temp 中連續 64 rows 搬回 CPU：block64 佈局 = [row0][row1]...[row63]
                 cim_.copy_temp_block_to_cpu(block64.data(),
                                             w.bank, w.mat, array,
-                                            /*start_row=*/kDescTempBase,
-                                            /*num_rows=*/kDescDims);
-                
+                                            kDescTempBase,
+                                            kDescDims);
+
+                // Rows for zero-valued query dimensions were never issued, so make sure
+                // they do not contribute to the mismatch accumulator.
                 for (int d = 0; d < kDescDims; ++d) {
                     if (qdesc64[d] == 0) {
-                        // block64 的佈局假設是 Row-Major: [Row0][Row1]...
-                        // 將該 Row 的所有 bytes (kRowBytes) 設為 0
-                        std::memset(block64.data() + static_cast<size_t>(d) * kRowBytes, 
-                                    0, 
+                        std::memset(block64.data() + static_cast<size_t>(d) * kRowBytes,
+                                    0,
                                     kRowBytes);
                     }
                 }
-                // 對這個 array 的每個 job，把 64 rows 加到 planes[job]
-                // 假設你已經實作：Planes::add_mask_bytes(const uint8_t* rows64, size_t strideBytes)
-                // - rows64 指向 row0 的起始位址
-                // - strideBytes = kRowBytes
-                for (size_t ji : arr_jobs[k]) {
+
+                for (size_t ji = arr_begin; ji < arr_end; ++ji) {
                     planes[ji].add_mask_block_bytes(block64.data(), kRowBytes, kDescDims);
                 }
+
+                arr_begin = arr_end;
             }
 
-            // ---- (D) lane scan（這個 MatWork 完成後即可掃描）----
+            // C. Scan candidate lanes for each finished job.
             for (size_t ji = w.job_begin; ji < w.job_end; ++ji) {
                 const auto& jb = jobs[ji];
                 const auto& bp = place_.bucket.at(jb.lid);
@@ -796,9 +668,9 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
 
                 for (uint32_t lane = 0; lane < valid; ++lane) {
-                    // if (lane_get_bit(jb.geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
+                    if (lane_get_bit(jb.geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
 
-                    const int32_t mid = map_.postings.map_ids.at(static_cast<size_t>(base_off + lane));
+                    const int32_t mid = map_ids[static_cast<size_t>(base_off + lane)];
                     const uint32_t mis = planes[ji].lane_value(static_cast<int>(lane));
 
                     auto& best = results[qid];
@@ -809,57 +681,11 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 }
             }
 
-            // 這個 MatWork 完成（不再 push 回 queue）
             total_work_items--;
         }
     }
 
     return results;
 }
-
-// MatchResult IvfMatcher::match_one_query_desc(uint8_t qgx, uint8_t qgy, const uint8_t* qdesc64, uint32_t nprobe, uint32_t max_groups_per_list)
-// {
-//     MatchResult best;
-
-//     const uint32_t K = map_.postings.nlist;
-//     if (K == 0) return best;
-
-//     const std::vector<uint32_t> lists = select_lists_cpu(qdesc64, nprobe);
-
-//     for (uint32_t lid : lists) {
-//         const auto& bp = place_.bucket.at(lid);
-//         const uint32_t groups_total = bp.desc_groups;
-//         const uint32_t groups = (max_groups_per_list == 0u) ? groups_total : std::min<uint32_t>(groups_total, max_groups_per_list);
-
-//         for (uint32_t g = 0; g < groups; ++g) {
-//             MaskRow geo_xy{};
-//             geo_eq_masks_xy(lid, g, qgx, qgy, geo_xy);
-//             if (!mask_any(geo_xy)) continue;
-
-//             Planes planes;
-//             desc_mismatch_planes(lid, g, qdesc64, planes);
-
-//             const uint32_t base_off = bp.posting_off + g * static_cast<uint32_t>(kLanesPerGroup);
-//             const uint32_t remain   = bp.map_count > g * static_cast<uint32_t>(kLanesPerGroup)
-//                                     ? (bp.map_count - g * static_cast<uint32_t>(kLanesPerGroup))
-//                                     : 0u;
-//             const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
-
-//             for (uint32_t lane = 0; lane < valid; ++lane) {
-//                 if (lane_get_bit(geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
-
-//                 const int32_t mid = map_.postings.map_ids.at(static_cast<size_t>(base_off + lane));
-//                 const uint32_t mis = planes.lane_value(static_cast<int>(lane));
-
-//                 if (mis < best.best_mismatch || (mis == best.best_mismatch && mid < best.best_map_id)) {
-//                     best.best_mismatch = static_cast<uint8_t>(mis);
-//                     best.best_map_id = mid;
-//                 }
-//             }
-//         }
-//     }
-
-//     return best;
-// }
 
 } // namespace msim

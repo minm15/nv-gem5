@@ -4,14 +4,16 @@
 
 namespace msim {
 
-// static constexpr const char* kMapDir   = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/export_gem5/2013-01-10/map";
-// static constexpr const char* kQueryDir = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/export_gem5/2013-01-10/query";
+#ifndef MSIM_MAP_DIR
+#define MSIM_MAP_DIR "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/map"
+#endif
 
-// static constexpr const char* kMapDir   = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/test/map";
-// static constexpr const char* kQueryDir = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_matching/test/query";
+#ifndef MSIM_QUERY_DIR
+#define MSIM_QUERY_DIR "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/query"
+#endif
 
-static constexpr const char* kMapDir   = "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/map";
-static constexpr const char* kQueryDir = "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/query";
+static constexpr const char* kMapDir   = MSIM_MAP_DIR;
+static constexpr const char* kQueryDir = MSIM_QUERY_DIR;
 
 // CIM geometry (512x512 bits per array => 512 rows, 512 cols => rowBytes=64).
 static constexpr uint32_t kRowBits   = 9;   // 2^9  = 512 rows

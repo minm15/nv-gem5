@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 #define DEFAULT_READWRITE_ADDRESS ((volatile uint64_t *const)0x10000000ul)
@@ -28,6 +29,35 @@ class CimModule
     unsigned arrayBits;
     unsigned rowBits;
     unsigned columnBits;
+
+#ifdef MSIM_CIM_EMU
+  public:
+    struct RegionKey {
+        uint16_t bank;
+        uint16_t mat;
+        uint16_t array;
+
+        bool operator==(const RegionKey& other) const
+        {
+            return bank == other.bank && mat == other.mat && array == other.array;
+        }
+    };
+
+    struct RegionKeyHash {
+        size_t operator()(const RegionKey& key) const
+        {
+            size_t h = static_cast<size_t>(key.bank);
+            h = (h * 131u) ^ static_cast<size_t>(key.mat);
+            h = (h * 131u) ^ static_cast<size_t>(key.array);
+            return h;
+        }
+    };
+
+    std::unordered_map<RegionKey, std::vector<uint8_t>, RegionKeyHash> rwStorage_;
+    std::unordered_map<RegionKey, std::vector<uint8_t>, RegionKeyHash> tempStorage_;
+
+  protected:
+#endif
 
     struct CommandEncode
     {
