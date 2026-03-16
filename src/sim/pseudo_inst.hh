@@ -103,6 +103,7 @@ void triggerWorkloadEvent(ThreadContext *tc);
 void nvReset(ThreadContext *tc, int number);
 void m5_cim_push(ThreadContext *tc, Addr dest_vaddr, Addr src_paddr, uint64_t len);
 void m5_cim_issue(ThreadContext *tc, Addr cmd_addr, uint64_t w0, uint64_t w1, uint64_t w2, uint64_t w3);
+void m5_cim_pull(ThreadContext *tc, Addr src_vaddr, Addr dst_paddr, uint64_t len);
 
 
 /**
@@ -229,7 +230,7 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
 
       //case M5OP_RESERVED1:
       //case M5OP_RESERVED2:
-      case M5OP_RESERVED3:
+      //case M5OP_RESERVED3:
       case M5OP_RESERVED4:
       //case M5OP_RESERVED5:
         warn("Unimplemented m5 op (%#x)\n", func);
@@ -250,6 +251,10 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
 
       case M5OP_CIM_ISSUE: 
         invokeSimcall<ABI>(tc, m5_cim_issue);
+        return true;
+
+      case M5OP_CIM_PULL:
+        invokeSimcall<ABI>(tc, m5_cim_pull);
         return true;
 
       default:

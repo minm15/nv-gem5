@@ -617,3 +617,8 @@ void
 CimModule::do_pseudo_push(void*, uintptr_t, size_t) const
 {
 }
+
+void
+CimModule::do_pseudo_pull(const void*, uintptr_t, size_t) const
+{
+}

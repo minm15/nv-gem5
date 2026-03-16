@@ -380,9 +380,7 @@ CimModule::copy_to_cim(uint16_t bank,
 
     const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
-
-    uint8_t *dest = reinterpret_cast<uint8_t *>(base + offs);
-    std::memcpy(dest, cpu_array, size_in_byte);
+    do_pseudo_pull(cpu_array, base + offs, size_in_byte);
 }
 
 // void
@@ -467,6 +465,21 @@ CimModule::do_pseudo_push(void *dest_vaddr, uintptr_t src_paddr, size_t size) co
 }
 
 void
+CimModule::do_pseudo_pull(const void *src_vaddr, uintptr_t dst_paddr, size_t size) const
+{
+    register uint64_t reg0 asm("x0") = reinterpret_cast<uintptr_t>(src_vaddr);
+    register uint64_t reg1 asm("x1") = static_cast<uint64_t>(dst_paddr);
+    register uint64_t reg2 asm("x2") = static_cast<uint64_t>(size);
+
+    __asm__ __volatile__ (
+        ".inst 0xff580110\n\t"
+        : "+r" (reg0)
+        : "r" (reg0), "r" (reg1), "r" (reg2)
+        : "memory"
+    );
+}
+
+void
 CimModule::copy_to_cpu(void *cpu_array,
                        uint16_t bank,
                        uint16_t mat,
@@ -541,45 +554,13 @@ CimModule::CommandEncode::print()
     printf("------\n");
 }
 
-void
-CimModule::CommandEncode::issue()
-{
-    uint64_t w0 = 0;
-    uint64_t w1 = 0;
-    uint64_t w2 = 0;
-    uint64_t w3 = 0;
-
-    w0 |= (static_cast<uint64_t>(operation_type))      << 56;
-    w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
-    w0 |= (static_cast<uint64_t>(byte_mask))           << 40;
-    w0 |= (static_cast<uint64_t>(dest))                << 16;
-    w0 |= (static_cast<uint64_t>(bank_mask16))         << 0;
-
-    w1 = column_mask;
-
-    if ((operation_type % 0x80u) < 3) {
-        w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
-        w2 |= (static_cast<uint64_t>(row_number[1])) << 16;
-        w2 |= (static_cast<uint64_t>(row_number[2])) << 32;
-        w2 |= (static_cast<uint64_t>(row_number[3])) << 48;
-    } else {
-        w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
-    }
-
-    w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
-    w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
-
-    volatile uint64_t *ca = commandAddress;
-    ca[1] = w1;
-    ca[2] = w2;
-    ca[3] = w3;
-    ca[0] = w0;
-}
-
 // void
 // CimModule::CommandEncode::issue()
 // {
-//     uint64_t w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+//     uint64_t w0 = 0;
+//     uint64_t w1 = 0;
+//     uint64_t w2 = 0;
+//     uint64_t w3 = 0;
 
 //     w0 |= (static_cast<uint64_t>(operation_type))      << 56;
 //     w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
@@ -601,16 +582,48 @@ CimModule::CommandEncode::issue()
 //     w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
 //     w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
 
-//     register uint64_t x0 asm("x0") = reinterpret_cast<uintptr_t>(commandAddress);
-//     register uint64_t x1 asm("x1") = w0;
-//     register uint64_t x2 asm("x2") = w1;
-//     register uint64_t x3 asm("x3") = w2;
-//     register uint64_t x4 asm("x4") = w3;
-
-//     __asm__ __volatile__ (
-//         ".inst he\n\t"
-//         : "+r" (x0)
-//         : "r" (x0), "r" (x1), "r" (x2), "r" (x3), "r" (x4)
-//         : "memory"
-//     );
+//     volatile uint64_t *ca = commandAddress;
+//     ca[1] = w1;
+//     ca[2] = w2;
+//     ca[3] = w3;
+//     ca[0] = w0;
 // }
+
+void
+CimModule::CommandEncode::issue()
+{
+    uint64_t w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+
+    w0 |= (static_cast<uint64_t>(operation_type))      << 56;
+    w0 |= (static_cast<uint64_t>(operation_flag_mask)) << 48;
+    w0 |= (static_cast<uint64_t>(byte_mask))           << 40;
+    w0 |= (static_cast<uint64_t>(dest))                << 16;
+    w0 |= (static_cast<uint64_t>(bank_mask16))         << 0;
+
+    w1 = column_mask;
+
+    if ((operation_type % 0x80u) < 3) {
+        w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
+        w2 |= (static_cast<uint64_t>(row_number[1])) << 16;
+        w2 |= (static_cast<uint64_t>(row_number[2])) << 32;
+        w2 |= (static_cast<uint64_t>(row_number[3])) << 48;
+    } else {
+        w2 |= (static_cast<uint64_t>(row_number[0])) << 0;
+    }
+
+    w3 |= (static_cast<uint64_t>(mat_mask32)) << 0;
+    w3 |= (static_cast<uint64_t>(array_mask32)) << 32;
+
+    register uint64_t x0 asm("x0") = reinterpret_cast<uintptr_t>(commandAddress);
+    register uint64_t x1 asm("x1") = w0;
+    register uint64_t x2 asm("x2") = w1;
+    register uint64_t x3 asm("x3") = w2;
+    register uint64_t x4 asm("x4") = w3;
+
+    __asm__ __volatile__ (
+        ".inst 0xff570110\n\t"
+        : "+r" (x0)
+        : "r" (x0), "r" (x1), "r" (x2), "r" (x3), "r" (x4)
+        : "memory"
+    );
+}

@@ -651,5 +651,21 @@ m5_cim_issue(ThreadContext *tc, Addr cmd_addr, uint64_t w0, uint64_t w1, uint64_
     DPRINTF(PseudoInst, "Pseudo-issue CIM cmd via writeBlob (Zero Cost): w0=%#lx\n", w0);
 }
 
+void
+m5_cim_pull(ThreadContext *tc, Addr src_vaddr, Addr dst_paddr, uint64_t len)
+{
+    DPRINTF(PseudoInst,
+            "pseudo_inst::m5_cim_pull(src_vaddr: %#x, dst_paddr: %#x, len: %d)\n",
+            src_vaddr, dst_paddr, len);
+
+    TranslatingPortProxy fs_proxy(tc);
+    SETranslatingPortProxy se_proxy(tc);
+    PortProxy &virt_proxy = FullSystem ? fs_proxy : se_proxy;
+
+    std::vector<uint8_t> buf(len);
+    virt_proxy.readBlob(src_vaddr, buf.data(), len);
+    tc->getSystemPtr()->physProxy.writeBlob(dst_paddr, buf.data(), len);
+}
+
 } // namespace pseudo_inst
 } // namespace gem5

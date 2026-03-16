@@ -374,9 +374,37 @@ CimModule::copy_to_cim(uint16_t bank,
 
     const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
+    do_pseudo_pull(cpu_array, base + offs, size_in_byte);
+}
 
-    uint8_t *dest = reinterpret_cast<uint8_t *>(base + offs);
-    std::memcpy(dest, cpu_array, size_in_byte);
+void
+CimModule::do_pseudo_push(void *dest_vaddr, uintptr_t src_paddr, size_t size) const
+{
+    register uint64_t reg0 asm("x0") = reinterpret_cast<uintptr_t>(dest_vaddr);
+    register uint64_t reg1 asm("x1") = static_cast<uint64_t>(src_paddr);
+    register uint64_t reg2 asm("x2") = static_cast<uint64_t>(size);
+
+    __asm__ __volatile__ (
+        ".inst 0xff560110\n\t"
+        : "+r" (reg0)
+        : "r" (reg0), "r" (reg1), "r" (reg2)
+        : "memory"
+    );
+}
+
+void
+CimModule::do_pseudo_pull(const void *src_vaddr, uintptr_t dst_paddr, size_t size) const
+{
+    register uint64_t reg0 asm("x0") = reinterpret_cast<uintptr_t>(src_vaddr);
+    register uint64_t reg1 asm("x1") = static_cast<uint64_t>(dst_paddr);
+    register uint64_t reg2 asm("x2") = static_cast<uint64_t>(size);
+
+    __asm__ __volatile__ (
+        ".inst 0xff580110\n\t"
+        : "+r" (reg0)
+        : "r" (reg0), "r" (reg1), "r" (reg2)
+        : "memory"
+    );
 }
 
 void
@@ -386,22 +414,9 @@ CimModule::copy_to_cpu(void *cpu_array,
 {
     checkGeometryReady();
     
-    uint64_t vaddr = reinterpret_cast<uintptr_t>(cpu_array);
     uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
     uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
-    uint64_t paddr = base + offs;
-    uint64_t len = size_in_byte;
-
-    register uint64_t reg0 asm("x0") = vaddr;
-    register uint64_t reg1 asm("x1") = paddr;
-    register uint64_t reg2 asm("x2") = len;
-
-    __asm__ __volatile__ (
-        ".inst 0xff560110\n\t"
-        : "+r" (reg0) 
-        : "r" (reg0), "r" (reg1), "r" (reg2)
-        : "memory"
-    );
+    do_pseudo_push(cpu_array, base + offs, size_in_byte);
 }
 
 void
@@ -418,22 +433,9 @@ CimModule::copy_temp_to_cpu(void *cpu_array,
     assert(tempAddress != nullptr);
     assert(size_in_byte == (1ull << columnBits));
 
-    uint64_t vaddr = reinterpret_cast<uintptr_t>(cpu_array);
-    uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress); 
+    uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
     uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, row);
-    uint64_t paddr = base + offs;
-    uint64_t len = size_in_byte;
-
-    register uint64_t reg0 asm("x0") = vaddr;
-    register uint64_t reg1 asm("x1") = paddr;
-    register uint64_t reg2 asm("x2") = len;
-
-    __asm__ __volatile__ (
-        ".inst 0xff560110\n\t"
-        : "+r" (reg0) 
-        : "r" (reg0), "r" (reg1), "r" (reg2)
-        : "memory"
-    );
+    do_pseudo_push(cpu_array, base + offs, size_in_byte);
 }
 
 void
@@ -455,20 +457,7 @@ CimModule::copy_temp_block_to_cpu(void *cpu_array,
     const size_t row_size = (1ull << columnBits);
     const size_t total_size = num_rows * row_size;
 
-    uint64_t vaddr = reinterpret_cast<uintptr_t>(cpu_array);
-    uint64_t paddr = static_cast<uint64_t>(base + offs);
-    uint64_t len = static_cast<uint64_t>(total_size);
-
-    register uint64_t reg0 asm("x0") = vaddr;
-    register uint64_t reg1 asm("x1") = paddr;
-    register uint64_t reg2 asm("x2") = len;
-
-    __asm__ __volatile__ (
-        ".inst 0xff560110\n\t"
-        : "+r" (reg0)
-        : "r" (reg0), "r" (reg1), "r" (reg2)
-        : "memory"
-    );
+    do_pseudo_push(cpu_array, base + offs, total_size);
 }
 
 // void

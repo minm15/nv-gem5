@@ -183,6 +183,9 @@ class CimModule
         uint16_t array,
         uint16_t start_row,
         size_t num_rows);
+
+    void do_pseudo_push(void *dest_vaddr, uintptr_t src_paddr, size_t size) const;
+    void do_pseudo_pull(const void *src_vaddr, uintptr_t dst_paddr, size_t size) const;
 };
 
 #endif // __CIM_API__HPP__

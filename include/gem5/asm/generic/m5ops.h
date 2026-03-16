@@ -72,7 +72,7 @@
 
 #define M5OP_CIM_PUSH           0x56 // Reserved for user
 #define M5OP_CIM_ISSUE          0x57 // Reserved for user
-#define M5OP_RESERVED3          0x58 // Reserved for user
+#define M5OP_CIM_PULL           0x58 // Reserved for user
 #define M5OP_RESERVED4          0x59 // Reserved for user
 
 #define M5OP_WORK_BEGIN         0x5a

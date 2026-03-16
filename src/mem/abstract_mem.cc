@@ -590,11 +590,6 @@ AbstractMemory::functionalAccess(PacketPtr pkt)
 {
 #ifdef CDNCcimFlag
     CimHandler *cimHandlerPtr = getCimHandlerPtr(pkt->getAddr());
-    if (cimHandlerPtr) {
-        // panic(
-        //     "\n>>> Should Not have functional access to CIM region in %s\n",
-        //     __func__);
-    }
 #endif // CDNCcimFlag
 
     assert(pkt->getAddrRange().isSubset(range));
@@ -609,7 +604,23 @@ AbstractMemory::functionalAccess(PacketPtr pkt)
         pkt->makeResponse();
     } else if (pkt->isWrite()) {
         if (pmemAddr) {
+#ifdef CDNCcimFlag
+            if (cimHandlerPtr) {
+                if (cimHandlerPtr->isCimReadWriteRegion(pkt->getAddr()) ||
+                    cimHandlerPtr->isCimBufferRegion(pkt->getAddr())) {
+                    pkt->writeData(host_addr);
+                } else if (cimHandlerPtr->isCimCommandRegion(pkt->getAddr())) {
+                    pkt->writeData(host_addr);
+                    cimHandlerPtr->cimFetchCommand(this, pkt, host_addr);
+                } else {
+                    pkt->writeData(host_addr);
+                }
+            } else {
+                pkt->writeData(host_addr);
+            }
+#else
             pkt->writeData(host_addr);
+#endif // CDNCcimFlag
         }
         TRACE_PACKET("Write");
         pkt->makeResponse();
