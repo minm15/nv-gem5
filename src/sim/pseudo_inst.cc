@@ -59,6 +59,9 @@
 #include "debug/Quiesce.hh"
 #include "debug/WorkItems.hh"
 #include "dev/net/dist_iface.hh"
+#ifdef CDNCcimFlag
+#include "mem/abstract_mem.hh"
+#endif
 #include "mem/se_translating_port_proxy.hh"
 #include "mem/translating_port_proxy.hh"
 #include "params/BaseCPU.hh"
@@ -644,11 +647,28 @@ m5_cim_push(ThreadContext *tc, Addr dest_vaddr, Addr src_paddr, uint64_t len)
 void
 m5_cim_issue(ThreadContext *tc, Addr cmd_addr, uint64_t w0, uint64_t w1, uint64_t w2, uint64_t w3)
 {
+#ifdef CDNCcimFlag
+    auto *system = tc->getSystemPtr();
+    auto *mem = system->getPhysMem().getMemory(cmd_addr);
+    panic_if(!mem, "Pseudo-issue CIM cmd to unmapped address %#x", cmd_addr);
+
+    auto *cim = mem->getCimHandlerPtr(cmd_addr);
+    panic_if(!cim, "Pseudo-issue CIM cmd to non-CIM address %#x", cmd_addr);
+
+    cim->issueCommand(mem, cmd_addr, w0, w1, w2, w3);
+
+    DPRINTF(PseudoInst,
+            "Pseudo-issue CIM cmd direct: addr=%#x w0=%#lx\n",
+            cmd_addr, w0);
+#else
     uint64_t cmd_data[4] = {w0, w1, w2, w3};
 
-    tc->getSystemPtr()->physProxy.writeBlob(cmd_addr, (const uint8_t *)cmd_data, sizeof(cmd_data));
+    tc->getSystemPtr()->physProxy.writeBlob(
+        cmd_addr, reinterpret_cast<const uint8_t *>(cmd_data),
+        sizeof(cmd_data));
 
     DPRINTF(PseudoInst, "Pseudo-issue CIM cmd via writeBlob (Zero Cost): w0=%#lx\n", w0);
+#endif
 }
 
 void

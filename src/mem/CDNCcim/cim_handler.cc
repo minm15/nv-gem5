@@ -80,32 +80,13 @@ CimHandler::regionSizeBytes() const
 }
 
 void
-CimHandler::cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t *host_addr)
+CimHandler::decodeCommandWords(
+    uint64_t w0,
+    uint64_t w1,
+    uint64_t w2,
+    uint64_t w3,
+    CommandDecode &command) const
 {
-    // DPRINTF(CIMDBG, "call cimFetchCommand\n");
-    // DPRINTF(CIMDBG, "[%s:%s:%s] from address: 0x%lx : command: 0x%016lx \n",
-    //     __FILE__, __func__, __LINE__, pkt->getAddr(), *(uint64_t *)host_addr);
-
-    uint64_t *command_address = reinterpret_cast<uint64_t *>(
-        abstract_mem->toHostAddr(commandWriteAddress));
-
-    if (command_address[0] == 0ul)
-        return;
-
-    CommandDecode command;
-
-    if (command_address[0] & (1ul << 63)) {
-        panic("Short command is not supported in this protocol.\n");
-    }
-
-    if ((command_address[1] == 0ul) || (command_address[2] == 0ul) || (command_address[3] == 0ul))
-        return;
-
-    const uint64_t w0 = command_address[0];
-    const uint64_t w1 = command_address[1];
-    const uint64_t w2 = command_address[2];
-    const uint64_t w3 = command_address[3];
-
     command.operation_type = (w0 >> 56) & 0xffu;
     command.operation_flag_mask = (w0 >> 48) & 0xffu;
     command.byte_mask = (w0 >> 40) & 0xffu;
@@ -140,6 +121,61 @@ CimHandler::cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t
                   command.operation_type);
             break;
     }
+}
+
+void
+CimHandler::issueCommand(
+    AbstractMemory *abstract_mem,
+    Addr cmd_addr,
+    uint64_t w0,
+    uint64_t w1,
+    uint64_t w2,
+    uint64_t w3)
+{
+    panic_if(!abstract_mem, "CIM issue missing backing memory for %#x", cmd_addr);
+    panic_if(!isCimCommandRegion(cmd_addr),
+             "CIM issue address %#x is outside the command region", cmd_addr);
+
+    if (w0 == 0ul) {
+        return;
+    }
+
+    if (w0 & (1ul << 63)) {
+        panic("Short command is not supported in this protocol.\n");
+    }
+
+    CommandDecode command;
+    decodeCommandWords(w0, w1, w2, w3, command);
+    cimExecuteCommand(abstract_mem, command);
+}
+
+void
+CimHandler::cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t *host_addr)
+{
+    // DPRINTF(CIMDBG, "call cimFetchCommand\n");
+    // DPRINTF(CIMDBG, "[%s:%s:%s] from address: 0x%lx : command: 0x%016lx \n",
+    //     __FILE__, __func__, __LINE__, pkt->getAddr(), *(uint64_t *)host_addr);
+
+    uint64_t *command_address = reinterpret_cast<uint64_t *>(
+        abstract_mem->toHostAddr(commandWriteAddress));
+
+    if (command_address[0] == 0ul)
+        return;
+
+    CommandDecode command;
+
+    if (command_address[0] & (1ul << 63)) {
+        panic("Short command is not supported in this protocol.\n");
+    }
+
+    if ((command_address[1] == 0ul) || (command_address[2] == 0ul) || (command_address[3] == 0ul))
+        return;
+
+    const uint64_t w0 = command_address[0];
+    const uint64_t w1 = command_address[1];
+    const uint64_t w2 = command_address[2];
+    const uint64_t w3 = command_address[3];
+    decodeCommandWords(w0, w1, w2, w3, command);
 
     command_address[0] = 0ul;
     command_address[1] = 0ul;

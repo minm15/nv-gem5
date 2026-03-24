@@ -89,6 +89,12 @@ class CimHandler : public SimObject
         statistics::Scalar orOpCount;
     } stats;
 
+    void decodeCommandWords(
+        uint64_t w0,
+        uint64_t w1,
+        uint64_t w2,
+        uint64_t w3,
+        CommandDecode &command) const;
     void cimExecuteCommand(AbstractMemory *abstract_mem, CommandDecode &command);
     void cimUpdateLatencyTable(bool init, uint8_t operation, size_t bank);
 
@@ -149,6 +155,13 @@ class CimHandler : public SimObject
     CimHandler(const CimHandlerParams &_p);
     ~CimHandler();
 
+    void issueCommand(
+        AbstractMemory *abstract_mem,
+        Addr cmd_addr,
+        uint64_t w0,
+        uint64_t w1,
+        uint64_t w2,
+        uint64_t w3);
     void cimFetchCommand(AbstractMemory *abstract_mem, PacketPtr pkt, uint8_t *host_addr);
 
     Tick getCimLatency(const Addr &addr);

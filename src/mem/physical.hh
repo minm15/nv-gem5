@@ -214,6 +214,14 @@ class PhysicalMemory : public Serializable
     bool isMemAddr(Addr addr) const;
 
     /**
+     * Resolve a physical address to its backing memory object.
+     *
+     * @param addr A physical address
+     * @return The backing memory, or nullptr if the address is unmapped
+     */
+    AbstractMemory *getMemory(Addr addr) const;
+
+    /**
      * Get the memory ranges for all memories that are to be reported
      * to the configuration table. The ranges are merged before they
      * are returned such that any interleaved ranges appear as a
