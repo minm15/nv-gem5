@@ -19,7 +19,7 @@ CIM_API_SRC := src/cim_api.cpp
 CIM_SRC     := src/desc_test.cpp
 CPU_SRC     := src/desc_test.cpp
 
-# --- Flags (固定 O3) ---
+# --- Flags (fixed O3) ---
 CXXFLAGS_COMMON := -O3 -DNDEBUG -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DSTD_PRINT_OUTPUT
 CXXFLAGS_CIM    := $(CXXFLAGS_COMMON) -DinCIM=1
 CXXFLAGS_CPU    := $(CXXFLAGS_COMMON)

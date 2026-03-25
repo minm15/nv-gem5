@@ -176,7 +176,7 @@ class CimModule
         uint16_t row,
         size_t size_in_byte);
 
-    // 在 public: 區塊下新增
+    // Add this in the public section
     void copy_temp_block_to_cpu(void *cpu_array,
         uint16_t bank,
         uint16_t mat,

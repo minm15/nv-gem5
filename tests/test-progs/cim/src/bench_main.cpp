@@ -245,7 +245,7 @@ int main()
     //                   << " ROI(best_global=" << roi.best_global << ", mis=" << roi.best_mismatch << ")"
     //                   << " vs GOLDEN(best_global=" << gold.best_global << ", mis=" << gold.best_mismatch << ")\n";
 
-    //         // 依你需求：把這個 mismatch 的 qi 對每個 map 的 mismatch 分數全部印出來
+    //         // As requested, print per-map mismatch scores for this mismatched qi
     //         print_roi_vs_golden_scores_for_query(cim, wl, writer.placement(), qi);
     //         std::cout << "[DUMP] end qi=" << qi << "\n\n";
     //     }

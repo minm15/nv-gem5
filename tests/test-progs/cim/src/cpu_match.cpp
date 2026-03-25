@@ -10,7 +10,7 @@ CpuInvIndex build_inv_index(const Workload& wl)
     CpuInvIndex idx;
     idx.M = static_cast<uint32_t>(wl.M);
 
-    // reserve（可選）：降低 push_back 擴容
+    // Clear posting lists before filling the index
     for (int d = 0; d < kDims; ++d) {
         for (int v = 0; v < 16; ++v) idx.table[d][v].clear();
         idx.zero_table[d].clear();
@@ -36,8 +36,8 @@ CpuResults run_cpu_inverted_match(const Workload& wl, const CpuInvIndex& idx)
 
     const uint32_t M = static_cast<uint32_t>(wl.M);
 
-    // 每個 query 需要一個計分陣列：score[map_id]++
-    // M=512 很小，掃一遍找 max 也不貴
+    // Each query uses a score array: score[map_id]++
+    // M=512 is small, so a full max scan is cheap
     std::vector<uint16_t> score(M, 0);
 
     for (int qi = 0; qi < wl.Q; ++qi) {
@@ -45,7 +45,7 @@ CpuResults run_cpu_inverted_match(const Workload& wl, const CpuInvIndex& idx)
 
         uint16_t compared = 0;
 
-        // 只看 query 非 0 維度
+        // Only consider non-zero query dims
         for (int d = 0; d < kDims; ++d) {
             const uint8_t qv = static_cast<uint8_t>(wl.query_desc[static_cast<size_t>(qi)][static_cast<size_t>(d)] & 0x0Fu);
             if (qv == 0) continue;
@@ -53,12 +53,12 @@ CpuResults run_cpu_inverted_match(const Workload& wl, const CpuInvIndex& idx)
 
             const auto& posting = idx.table[d][qv];
             for (uint32_t mi : posting) {
-                // M 很小，uint16_t 足夠（最多加到 compared<=64）
+                // M is small; uint16_t is enough here (compared <= 64)
                 score[mi] = static_cast<uint16_t>(score[mi] + 1);
             }
         }
 
-        // argmax match，tie -> 最小 map_id
+        // Argmax match; ties go to the smaller map_id
         int32_t best_id = -1;
         uint16_t best_match = 0;
 

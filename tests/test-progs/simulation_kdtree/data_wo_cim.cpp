@@ -208,7 +208,7 @@ uint64_t matcher_ivf_roi(const IVFIndex& idx, const FrameQueries& fr) {
 
         // ---- scan postings from selected lists, apply geo + score, keep top-k ----
         struct Best { uint16_t s; uint32_t gid; };
-        Best best[16]; // top_k 通常很小，保守給 16
+        Best best[16]; // top_k is usually small, so reserve 16 slots
         uint32_t nb = 0;
 
         auto push_best = [&](uint16_t s, uint32_t gid) {

@@ -130,7 +130,7 @@ static float sum_weights(const std::vector<float>& w) {
 
 static float neff(const std::vector<float>& w) {
     // Python: 1 / (sum(w^2) * count)
-    // 這裡 count = P
+    // Here, count = P
     float s2 = 0.f;
     for (float x : w) s2 += x * x;
     if (s2 <= 0.f) return 0.f;
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
 
     FramesReader rdr(argv[2]);
 
-    // Reservoir sampling: 隨機抽 K 個 frame（等機率）
+    // Reservoir sampling: sample K frames uniformly at random
     std::mt19937_64 rng(seed);
     std::vector<Frame> sampled;
     sampled.reserve((size_t)K);

@@ -440,18 +440,18 @@ CimModule::copy_temp_block_to_cpu(void *cpu_array,
     assert(tempAddress != nullptr);
     assert(num_rows > 0);
 
-    // 計算記憶體起始位置
+    // Compute the base memory address
     const uintptr_t base = reinterpret_cast<uintptr_t>(tempAddress);
-    // 計算 start_row 的偏移量
+    // Compute the start_row byte offset
     const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, start_row);
     
     const uint8_t *src = reinterpret_cast<const uint8_t *>(base + offs);
     
-    // 計算總大小 = 行數 * 每行位元組數
+    // Compute total size = rows * bytes per row
     size_t row_size = (1ull << columnBits);
     size_t total_size = num_rows * row_size;
 
-    // 一次搬運整塊連續記憶體
+    // Copy the whole contiguous block at once
     std::memcpy(cpu_array, src, total_size);
 }
 

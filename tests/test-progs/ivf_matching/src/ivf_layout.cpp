@@ -74,7 +74,7 @@ IvfPlacement compute_ivf_placement(const IvfMapBins& map,
 
     p.bucket.resize(K);
 
-    // --- first pass: compute group counts (跟你原本一樣) ---
+    // --- first pass: compute group counts (same as before) ---
     for (uint32_t b = 0; b < K; ++b) {
         const uint32_t off0 = map.postings.offsets[b];
         const uint32_t off1 = map.postings.offsets[b + 1];
@@ -107,8 +107,8 @@ IvfPlacement compute_ivf_placement(const IvfMapBins& map,
             ceil_div_u32(bp.geo_groups, static_cast<uint32_t>(kGeoGroupsPerArray)); // 16 geo-groups per array
 
         // === mat padding (desc) ===
-        // 如果 bucket 需要 arrays <= 1 mat 才做「避免跨 mat」padding
-        // （若 need > arrays_per_mat，本來就一定跨 mat，但你也可以讓它對齊邊界；我這裡仍然對齊，通常也比較好看）
+        // Apply padding to avoid crossing mats when the bucket fits within one mat
+        // If it already exceeds one mat, it must cross mats, but we still align to the boundary
         pad_to_next_mat_if_needed(desc_arrays, need_desc_arrays, arrays_per_mat);
 
         // === mat padding (geo) ===

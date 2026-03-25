@@ -126,7 +126,7 @@ static inline float normal_pdf(float d, float sigma) {
     return (inv_sqrt_2pi / sigma) * std::exp(-0.5f * z * z);
 }
 
-// 回傳 checksum，避免被最佳化掉
+// Return a checksum to prevent optimization
 uint64_t measurement_update(
     const nanoflann::KDTreeSingleIndexAdaptor<
         nanoflann::L2_Simple_Adaptor<float, PointCloud2f>, PointCloud2f, 2
@@ -173,7 +173,7 @@ uint64_t measurement_update(
     for (float w : fr.weights) sumw += w;
     if (sumw > 0) for (float& w : fr.weights) w /= sumw;
 
-    // checksum: 取前幾個 weight 的 bit pattern xor
+    // checksum: xor the bit patterns of the first few weights
     uint64_t cs = 0;
     const uint32_t take = std::min<uint32_t>(fr.P, 16);
     for (uint32_t i = 0; i < take; i++) {
