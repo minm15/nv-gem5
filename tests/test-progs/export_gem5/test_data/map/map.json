@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "endianness": "little",
+  "desc_bits": 4,
+  "geo_grid": {
+    "dtype": "uint8",
+    "max": 15,
+    "qparams": [0.0, 0.0, 1.0],
+    "meaning": "deterministic verifier dataset"
+  },
+  "ivf": {
+    "nlist": 8,
+    "space": "aug128_l2",
+    "extra": {
+      "val_scale": {"ref": "ivf_val_scale"},
+      "idf_w": {"ref": "ivf_idf_w"},
+      "alpha_value": 1.0,
+      "beta_presence": 5.0,
+      "use_idf": 1
+    }
+  },
+  "bins": {
+    "map_desc_q4": {
+      "file": "map_desc_q4.bin",
+      "dtype": "uint8",
+      "shape": [32, 64],
+      "c_order": true,
+      "bytes": 2048
+    },
+    "map_geo_grid": {
+      "file": "map_geo_grid.bin",
+      "dtype": "uint8",
+      "shape": [32, 2],
+      "c_order": true,
+      "bytes": 64
+    },
+    "ivf_centroids": {
+      "file": "ivf_centroids.bin",
+      "dtype": "float32",
+      "shape": [8, 128],
+      "c_order": true,
+      "bytes": 4096
+    },
+    "ivf_postings_offsets": {
+      "file": "ivf_postings_offsets.bin",
+      "dtype": "uint32",
+      "shape": [9],
+      "c_order": true,
+      "bytes": 36
+    },
+    "ivf_postings_map_ids": {
+      "file": "ivf_postings_map_ids.bin",
+      "dtype": "int32",
+      "shape": [32],
+      "c_order": true,
+      "bytes": 128
+    },
+    "ivf_val_scale": {
+      "file": "ivf_val_scale.bin",
+      "dtype": "float32",
+      "shape": [64],
+      "c_order": true,
+      "bytes": 256
+    },
+    "ivf_idf_w": {
+      "file": "ivf_idf_w.bin",
+      "dtype": "float32",
+      "shape": [64],
+      "c_order": true,
+      "bytes": 256
+    }
+  },
+  "desc_quant": {
+    "method": "handcrafted_verifier",
+    "thresholds": [],
+    "note": "Each query case has a known expected winner"
+  }
+}

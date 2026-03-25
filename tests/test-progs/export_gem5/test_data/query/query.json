@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "endianness": "little",
+  "session": "ivf_verify",
+  "desc_bits": 4,
+  "geo_grid": {
+    "dtype": "uint8",
+    "max": 15,
+    "qparams": [0.0, 0.0, 1.0],
+    "meaning": "deterministic verifier dataset"
+  },
+  "ivf": {
+    "centroids_ref": "use map.json/ivf_centroids.bin",
+    "postings_ref": "use map.json/ivf_postings_*.bin",
+    "map_json_ref": "../map/map.json"
+  },
+  "bins": {
+    "query_desc_q4": {
+      "file": "query_desc_q4.bin",
+      "dtype": "uint8",
+      "shape": [7, 64],
+      "c_order": true,
+      "bytes": 448
+    },
+    "query_step_pose_grid": {
+      "file": "query_step_pose_grid.bin",
+      "dtype": "uint8",
+      "shape": [5, 2],
+      "c_order": true,
+      "bytes": 10
+    },
+    "query_step_offsets": {
+      "file": "query_step_offsets.bin",
+      "dtype": "uint32",
+      "shape": [6],
+      "c_order": true,
+      "bytes": 24
+    },
+    "query_step_counts": {
+      "file": "query_step_counts.bin",
+      "dtype": "uint16",
+      "shape": [5],
+      "c_order": true,
+      "bytes": 10
+    },
+    "query_step_relodo_i": {
+      "file": "query_step_relodo_i.bin",
+      "dtype": "int32",
+      "shape": [5],
+      "c_order": true,
+      "bytes": 20
+    },
+    "query_step_t_now": {
+      "file": "query_step_t_now.bin",
+      "dtype": "float64",
+      "shape": [5],
+      "c_order": true,
+      "bytes": 40
+    }
+  }
+}
