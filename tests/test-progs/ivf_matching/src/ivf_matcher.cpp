@@ -1,20 +1,104 @@
 #include "ivf_matcher.hpp"
 #include "layout.hpp"
 #include <algorithm>
-#include <cstring>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <deque>
 #include <limits>
 #include <stdexcept>
-#include <deque>
+
+#if defined(inCIM) && defined(IVF_PHASE_PROFILE)
+#include <gem5/m5ops.h>
+#endif
 
 namespace msim {
+
+namespace {
+
+#if defined(inCIM) && defined(IVF_PHASE_PROFILE)
+static inline uint64_t
+profileNowNs()
+{
+    return m5_rpns();
+}
+
+struct ScopedPhaseTimer
+{
+    uint64_t &accum_ns;
+    const uint64_t start_ns;
+
+    explicit ScopedPhaseTimer(uint64_t &accum)
+        : accum_ns(accum), start_ns(profileNowNs())
+    {}
+
+    ~ScopedPhaseTimer()
+    {
+        accum_ns += (profileNowNs() - start_ns);
+    }
+};
+
+struct MatchPhaseTotals
+{
+    uint64_t total_ns = 0;
+    uint64_t list_select_ns = 0;
+    uint64_t geo_job_build_ns = 0;
+    uint64_t group_work_ns = 0;
+    uint64_t desc_issue_ns = 0;
+    uint64_t readback_accum_ns = 0;
+    uint64_t candidate_scan_ns = 0;
+
+    void print(size_t query_count, size_t work_items) const
+    {
+        std::printf(
+            "[phase-profile] queries=%zu work_items=%zu total_ns=%llu "
+            "list_select_ns=%llu geo_job_build_ns=%llu group_work_ns=%llu "
+            "desc_issue_ns=%llu readback_accum_ns=%llu candidate_scan_ns=%llu\n",
+            query_count,
+            work_items,
+            static_cast<unsigned long long>(total_ns),
+            static_cast<unsigned long long>(list_select_ns),
+            static_cast<unsigned long long>(geo_job_build_ns),
+            static_cast<unsigned long long>(group_work_ns),
+            static_cast<unsigned long long>(desc_issue_ns),
+            static_cast<unsigned long long>(readback_accum_ns),
+            static_cast<unsigned long long>(candidate_scan_ns));
+    }
+};
+#else
+static inline uint64_t
+profileNowNs()
+{
+    return 0;
+}
+
+struct ScopedPhaseTimer
+{
+    explicit ScopedPhaseTimer(uint64_t &) {}
+};
+
+struct MatchPhaseTotals
+{
+    uint64_t total_ns = 0;
+    uint64_t list_select_ns = 0;
+    uint64_t geo_job_build_ns = 0;
+    uint64_t group_work_ns = 0;
+    uint64_t desc_issue_ns = 0;
+    uint64_t readback_accum_ns = 0;
+    uint64_t candidate_scan_ns = 0;
+
+    void print(size_t, size_t) const {}
+};
+#endif
+
+} // namespace
 
 struct DescJob {
     uint32_t qid;
     uint32_t lid;
     uint32_t g;
     uint16_t bank, mat, array;
-    msim::IvfMatcher::MaskRow geo_xy; 
+    uint32_t geo_mask_idx;
 };
 
 struct MatWork {
@@ -37,6 +121,53 @@ static inline uint8_t clamp_u8(int v, int lo, int hi)
     return static_cast<uint8_t>(v);
 }
 
+using RowQuad = std::array<uint16_t, 4>;
+using GeoValueArray = std::array<uint8_t, IvfMatcher::kGeoSweepWidth>;
+using GeoMaskArray = std::array<IvfMatcher::MaskRow, IvfMatcher::kGeoSweepWidth>;
+using GeoTempBlock = std::array<uint8_t, 2 * IvfMatcher::kGeoSweepWidth * kRowBytes>;
+
+static inline uint64_t
+load_u64(const uint8_t *src)
+{
+    uint64_t value = 0;
+    std::memcpy(&value, src, sizeof(value));
+    return value;
+}
+
+static inline void
+store_u64(uint8_t *dst, uint64_t value)
+{
+    std::memcpy(dst, &value, sizeof(value));
+}
+
+static inline GeoValueArray
+build_geo_probe_values(uint8_t center, uint8_t geo_max)
+{
+    GeoValueArray vals{};
+    size_t idx = 0;
+    for (int delta = -kGeoProbeRadius; delta <= kGeoProbeRadius; ++delta) {
+        vals[idx++] = clamp_u8(static_cast<int>(center) + delta, 0, geo_max);
+    }
+    return vals;
+}
+
+static inline RowQuad
+geo_rows_for_nibble(uint16_t row_base, bool is_x, bool high, uint8_t nibble)
+{
+    RowQuad rows{};
+    for (int bit = 0; bit < 4; ++bit) {
+        const bool inv = ((nibble >> bit) & 1u) != 0u;
+        if (is_x) {
+            rows[static_cast<size_t>(bit)] = static_cast<uint16_t>(
+                row_base + (high ? geo_x_row_high(bit, inv) : geo_x_row_low(bit, inv)));
+        } else {
+            rows[static_cast<size_t>(bit)] = static_cast<uint16_t>(
+                row_base + (high ? geo_y_row_high(bit, inv) : geo_y_row_low(bit, inv)));
+        }
+    }
+    return rows;
+}
+
 // Batch-compute equality masks for multiple candidate values on one axis.
 // Each candidate uses two temp rows (low/high nibble mismatch).
 // The helper writes the rows contiguously, then pulls them back in one block copy.
@@ -46,19 +177,17 @@ static inline void geo_batch_eq_masks_axis_block(
     uint32_t bucket_id,
     uint32_t group_in_bucket,
     bool is_x,
-    const std::vector<uint8_t>& vals,
-    std::vector<msim::IvfMatcher::MaskRow>& out_eq_masks,
-    uint16_t temp_base_row
+    const uint8_t *vals,
+    size_t num_vals,
+    msim::IvfMatcher::MaskRow *out_eq_masks,
+    uint16_t temp_base_row,
+    GeoTempBlock &block
 ) {
     using MaskRow = msim::IvfMatcher::MaskRow;
-
-    out_eq_masks.clear();
-    out_eq_masks.resize(vals.size());
-
-    if (vals.empty()) return;
+    if (num_vals == 0) return;
 
     // Keep geo temp rows separate from descriptor temp rows.
-    const uint16_t need_rows = static_cast<uint16_t>(2u * vals.size());
+    const uint16_t need_rows = static_cast<uint16_t>(2u * num_vals);
     if (temp_base_row + need_rows > 64) {
         throw std::runtime_error("geo_batch_eq_masks_axis_block: temp rows exceed [0,63] region");
     }
@@ -66,33 +195,15 @@ static inline void geo_batch_eq_masks_axis_block(
     uint16_t bank = 0, mat = 0, array = 0, row_base = 0;
     map_geo_bucket_group_to_region(place, bucket_id, group_in_bucket, bank, mat, array, row_base);
 
-    std::vector<uint16_t> rows;
-    rows.reserve(4);
-
     // A. For each candidate value, issue two ORs and write them to temp rows
     //    temp_base + 2*i and temp_base + 2*i + 1.
-    for (size_t i = 0; i < vals.size(); ++i) {
+    for (size_t i = 0; i < num_vals; ++i) {
         const uint8_t v  = vals[i];
         const uint8_t lo = static_cast<uint8_t>(v & 0x0Fu);
         const uint8_t hi = static_cast<uint8_t>((v >> 4) & 0x0Fu);
 
         auto issue_nibble = [&](bool high, uint8_t nib, uint16_t temp_row) {
-            rows.clear();
-            for (int b = 0; b < 4; ++b) {
-                const int qbit = (nib >> b) & 1u;
-                const bool inv = (qbit != 0);
-
-                uint16_t r = 0;
-                if (is_x) {
-                    r = static_cast<uint16_t>(
-                        row_base + (!high ? geo_x_row_low(b, inv) : geo_x_row_high(b, inv)));
-                } else {
-                    r = static_cast<uint16_t>(
-                        row_base + (!high ? geo_y_row_low(b, inv) : geo_y_row_high(b, inv)));
-                }
-                rows.push_back(r);
-            }
-
+            const RowQuad rows = geo_rows_for_nibble(row_base, is_x, high, nib);
             cim.OR(rows,
                    0xffu,
                    CimModule::Mask::bank(bank),
@@ -107,42 +218,60 @@ static inline void geo_batch_eq_masks_axis_block(
     }
 
     // B. Read back the full temp block in one transfer.
-    std::vector<uint8_t> block;
-    block.resize(static_cast<size_t>(need_rows) * static_cast<size_t>(kRowBytes));
-
     cim.copy_temp_block_to_cpu(block.data(),
                                bank, mat, array,
                                temp_base_row,
                                static_cast<size_t>(need_rows));
 
     // C. Combine the low/high mismatch rows into a byte-level equality mask.
-    for (size_t i = 0; i < vals.size(); ++i) {
+    for (size_t i = 0; i < num_vals; ++i) {
         const uint8_t* mis_lo = block.data() + (static_cast<size_t>(2u * i + 0u) * kRowBytes);
         const uint8_t* mis_hi = block.data() + (static_cast<size_t>(2u * i + 1u) * kRowBytes);
 
-        MaskRow eq{};
-        for (size_t j = 0; j < eq.size(); ++j) {
+        MaskRow &eq = out_eq_masks[i];
+        size_t j = 0;
+        for (; j + sizeof(uint64_t) <= eq.size(); j += sizeof(uint64_t)) {
+            store_u64(eq.data() + j, (~load_u64(mis_lo + j)) & (~load_u64(mis_hi + j)));
+        }
+        for (; j < eq.size(); ++j) {
             const uint8_t a = static_cast<uint8_t>(~mis_lo[j]);
             const uint8_t b = static_cast<uint8_t>(~mis_hi[j]);
             eq[j] = static_cast<uint8_t>(a & b);
         }
-        out_eq_masks[i] = eq;
     }
 }
 
 void IvfMatcher::mask_and_inplace(MaskRow& a, const MaskRow& b)
 {
-    for (size_t i = 0; i < a.size(); ++i) a[i] = static_cast<uint8_t>(a[i] & b[i]);
+    size_t i = 0;
+    for (; i + sizeof(uint64_t) <= a.size(); i += sizeof(uint64_t)) {
+        store_u64(a.data() + i, load_u64(a.data() + i) & load_u64(b.data() + i));
+    }
+    for (; i < a.size(); ++i) {
+        a[i] = static_cast<uint8_t>(a[i] & b[i]);
+    }
 }
 
 void IvfMatcher::mask_or_inplace(MaskRow& a, const MaskRow& b)
 {
-    for (size_t i = 0; i < a.size(); ++i) a[i] = static_cast<uint8_t>(a[i] | b[i]);
+    size_t i = 0;
+    for (; i + sizeof(uint64_t) <= a.size(); i += sizeof(uint64_t)) {
+        store_u64(a.data() + i, load_u64(a.data() + i) | load_u64(b.data() + i));
+    }
+    for (; i < a.size(); ++i) {
+        a[i] = static_cast<uint8_t>(a[i] | b[i]);
+    }
 }
 
 void IvfMatcher::mask_not_inplace(MaskRow& a)
 {
-    for (size_t i = 0; i < a.size(); ++i) a[i] = static_cast<uint8_t>(~a[i]);
+    size_t i = 0;
+    for (; i + sizeof(uint64_t) <= a.size(); i += sizeof(uint64_t)) {
+        store_u64(a.data() + i, ~load_u64(a.data() + i));
+    }
+    for (; i < a.size(); ++i) {
+        a[i] = static_cast<uint8_t>(~a[i]);
+    }
 }
 
 bool IvfMatcher::mask_any(const MaskRow& a)
@@ -177,18 +306,23 @@ void IvfMatcher::Planes::add_mask(const MaskRow& x)
 void IvfMatcher::Planes::add_mask_row_bytes(const uint8_t* row_bytes)
 {
     MaskRow carry{};
-    for (size_t i = 0; i < carry.size(); ++i) carry[i] = row_bytes[i];
+    std::memcpy(carry.data(), row_bytes, carry.size());
 
     for (size_t k = 0; k < b.size(); ++k) {
-        MaskRow sum{};
         MaskRow new_carry{};
-        for (size_t i = 0; i < sum.size(); ++i) {
+        size_t i = 0;
+        for (; i + sizeof(uint64_t) <= carry.size(); i += sizeof(uint64_t)) {
+            const uint64_t bk = load_u64(b[k].data() + i);
+            const uint64_t c = load_u64(carry.data() + i);
+            store_u64(b[k].data() + i, bk ^ c);
+            store_u64(new_carry.data() + i, bk & c);
+        }
+        for (; i < carry.size(); ++i) {
             const uint8_t bk = b[k][i];
             const uint8_t c  = carry[i];
-            sum[i]       = static_cast<uint8_t>(bk ^ c);
+            b[k][i] = static_cast<uint8_t>(bk ^ c);
             new_carry[i] = static_cast<uint8_t>(bk & c);
         }
-        b[k] = sum;
         carry = new_carry;
     }
 }
@@ -296,21 +430,7 @@ IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(uint32_t bucket_id, uint32_t gr
     const uint8_t hi = static_cast<uint8_t>((v >> 4) & 0x0Fu);
 
     auto or_nibble_mismatch = [&](bool high, uint8_t nib) -> MaskRow {
-        std::vector<uint16_t> rows;
-        rows.reserve(4);
-
-        for (int b = 0; b < 4; ++b) {
-            const int qbit = (nib >> b) & 1u;
-            const bool inv = (qbit != 0);
-
-            uint16_t r = 0;
-            if (is_x) {
-                r = static_cast<uint16_t>(row_base + (!high ? geo_x_row_low(b, inv) : geo_x_row_high(b, inv)));
-            } else {
-                r = static_cast<uint16_t>(row_base + (!high ? geo_y_row_low(b, inv) : geo_y_row_high(b, inv)));
-            }
-            rows.push_back(r);
-        }
+        const RowQuad rows = geo_rows_for_nibble(row_base, is_x, high, nib);
 
         cim_.OR(rows,
                 0xffu,
@@ -335,64 +455,52 @@ IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(uint32_t bucket_id, uint32_t gr
 }
 
 void IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
-                                 uint8_t qgx, uint8_t qgy, MaskRow& out_mask_xy)
+                                 uint8_t qgx, uint8_t qgy,
+                                 const std::array<uint8_t, kGeoSweepWidth>& gx_vals,
+                                 const std::array<uint8_t, kGeoSweepWidth>& gy_vals,
+                                 MaskRow& out_mask_xy)
 {
     out_mask_xy.fill(0);
 
     // Use temp rows [0,63] for geo, and keep descriptor temp rows above that.
     static constexpr uint16_t kGeoTempBase = 0;
-
-    // 1. Fixed-axis masks for the query center.
-    std::vector<uint8_t> one_val;
+    GeoMaskArray eq_masks{};
+    GeoTempBlock block{};
 
     MaskRow my_fixed{};
     {
-        one_val = { qgy };
-        std::vector<MaskRow> eqs;
         geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
-                                      /*is_x=*/false, one_val, eqs, kGeoTempBase);
-        my_fixed = eqs[0];
+                                      /*is_x=*/false, &qgy, 1,
+                                      eq_masks.data(), kGeoTempBase, block);
+        my_fixed = eq_masks[0];
     }
 
     MaskRow mx_fixed{};
     {
-        one_val = { qgx };
-        std::vector<MaskRow> eqs;
         geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
-                                      /*is_x=*/true, one_val, eqs, kGeoTempBase);
-        mx_fixed = eqs[0];
+                                      /*is_x=*/true, &qgx, 1,
+                                      eq_masks.data(), kGeoTempBase, block);
+        mx_fixed = eq_masks[0];
     }
 
     // 2. Sweep x around the query location while y stays fixed.
-    std::vector<uint8_t> gx_vals;
-    gx_vals.reserve(static_cast<size_t>(2 * kGeoProbeRadius + 1));
-    for (int dx = -kGeoProbeRadius; dx <= kGeoProbeRadius; ++dx) {
-        gx_vals.push_back(clamp_u8(static_cast<int>(qgx) + dx, 0, map_.geo_max));
-    }
-
-    std::vector<MaskRow> mx_list;
     geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
-                                  /*is_x=*/true, gx_vals, mx_list, kGeoTempBase);
+                                  /*is_x=*/true, gx_vals.data(), gx_vals.size(),
+                                  eq_masks.data(), kGeoTempBase, block);
 
-    for (size_t i = 0; i < mx_list.size(); ++i) {
-        MaskRow tmp = mx_list[i];
+    for (size_t i = 0; i < gx_vals.size(); ++i) {
+        MaskRow tmp = eq_masks[i];
         mask_and_inplace(tmp, my_fixed);
         mask_or_inplace(out_mask_xy, tmp);
     }
 
     // 3. Sweep y around the query location while x stays fixed.
-    std::vector<uint8_t> gy_vals;
-    gy_vals.reserve(static_cast<size_t>(2 * kGeoProbeRadius + 1));
-    for (int dy = -kGeoProbeRadius; dy <= kGeoProbeRadius; ++dy) {
-        gy_vals.push_back(clamp_u8(static_cast<int>(qgy) + dy, 0, map_.geo_max));
-    }
-
-    std::vector<MaskRow> my_list;
     geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
-                                  /*is_x=*/false, gy_vals, my_list, kGeoTempBase);
+                                  /*is_x=*/false, gy_vals.data(), gy_vals.size(),
+                                  eq_masks.data(), kGeoTempBase, block);
 
-    for (size_t i = 0; i < my_list.size(); ++i) {
-        MaskRow tmp = my_list[i];
+    for (size_t i = 0; i < gy_vals.size(); ++i) {
+        MaskRow tmp = eq_masks[i];
         mask_and_inplace(tmp, mx_fixed);
         mask_or_inplace(out_mask_xy, tmp);
     }
@@ -409,42 +517,51 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
     uint16_t bank = 0, mat = 0, array = 0;
     map_desc_bucket_group_to_region(place_, bucket_id, group_in_bucket, bank, mat, array);
 
-    std::vector<uint16_t> rows;
-    rows.reserve(kDescBits);
-
-    // A. Issue one OR per descriptor dimension and store the results in
-    //    consecutive temp rows.
+    std::vector<uint8_t> active_dims;
+    active_dims.reserve(kDescDims);
     for (int d = 0; d < kDescDims; ++d) {
-        rows.clear();
+        if (qdesc64[d] != 0u) {
+            active_dims.push_back(static_cast<uint8_t>(d));
+        }
+    }
+    if (active_dims.empty()) {
+        return;
+    }
+
+    // A. Issue one OR per active descriptor dimension and pack the results
+    //    into consecutive temp rows.
+    for (size_t packed_idx = 0; packed_idx < active_dims.size(); ++packed_idx) {
+        const int d = static_cast<int>(active_dims[packed_idx]);
         const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
+        RowQuad rows{};
 
         for (int b = 0; b < kDescBits; ++b) {
             const int qbit = (qv >> b) & 1u;
-            const uint16_t r = (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
-            rows.push_back(r);
+            rows[static_cast<size_t>(b)] =
+                (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
         }
 
         cim_.OR(rows,
                 0xffu,
                 CimModule::Mask::bank(bank),
                 CimModule::Mask::colsAll(),
-                static_cast<uint16_t>(kDescTempBase + d),
+                static_cast<uint16_t>(kDescTempBase + packed_idx),
                 CimModule::Mask::mat(mat),
                 CimModule::Mask::array(array));
     }
 
-    // B. Read back the 64 temp rows in one transfer.
+    // B. Read back only the temp rows that were written.
     std::vector<uint8_t> block;
-    block.resize(static_cast<size_t>(kDescDims) * static_cast<size_t>(kRowBytes));
+    block.resize(active_dims.size() * static_cast<size_t>(kRowBytes));
 
     cim_.copy_temp_block_to_cpu(block.data(),
                                 bank, mat, array,
                                 kDescTempBase,
-                                static_cast<size_t>(kDescDims));
+                                active_dims.size());
 
-    // C. Accumulate the 64 mismatch rows with the bit-sliced adder.
-    for (int d = 0; d < kDescDims; ++d) {
-        const uint8_t* row_ptr = block.data() + static_cast<size_t>(d) * kRowBytes;
+    // C. Accumulate only the active mismatch rows.
+    for (size_t packed_idx = 0; packed_idx < active_dims.size(); ++packed_idx) {
+        const uint8_t* row_ptr = block.data() + packed_idx * static_cast<size_t>(kRowBytes);
         out_planes.add_mask_row_bytes(row_ptr);
     }
 }
@@ -470,6 +587,11 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     std::vector<MatchResult> results(m);
     if (m == 0) return results;
 
+    MatchPhaseTotals phase_totals;
+    const uint64_t total_start_ns = profileNowNs();
+    const GeoValueArray gx_probe_vals = build_geo_probe_values(qgx, map_.geo_max);
+    const GeoValueArray gy_probe_vals = build_geo_probe_values(qgy, map_.geo_max);
+
     const uint32_t K = map_.postings.nlist;
     std::vector<uint32_t> geo_group_base(static_cast<size_t>(K) + 1u, 0u);
     for (uint32_t lid = 0; lid < K; ++lid) {
@@ -488,7 +610,14 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     auto get_geo_mask = [&](uint32_t lid, uint32_t group_in_bucket) -> const MaskRow& {
         const uint32_t idx = geo_index(lid, group_in_bucket);
         if (geo_ready[idx] == 0u) {
-            geo_eq_masks_xy(lid, group_in_bucket, qgx, qgy, geo_masks[idx]);
+            geo_eq_masks_xy(
+                lid,
+                group_in_bucket,
+                qgx,
+                qgy,
+                gx_probe_vals,
+                gy_probe_vals,
+                geo_masks[idx]);
             geo_ready[idx] = 1u;
         }
         return geo_masks[idx];
@@ -497,33 +626,49 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     // Per-query work queues and bit-sliced accumulators.
     std::vector<std::vector<DescJob>> jobs_per_q(m);
     std::vector<std::vector<Planes>>  planes_per_q(m);
+    std::vector<std::vector<uint8_t>> active_dims_per_q(m);
 
     // Phase 1. Build jobs after list selection and geo filtering.
     for (size_t qi = 0; qi < m; ++qi) {
         const uint8_t* qdesc64 = desc_ptr + qi * 64u;
+        auto &active_dims = active_dims_per_q[qi];
+        active_dims.reserve(kDescDims);
+        for (int d = 0; d < kDescDims; ++d) {
+            if (qdesc64[d] != 0u) {
+                active_dims.push_back(static_cast<uint8_t>(d));
+            }
+        }
 
-        const std::vector<uint32_t> lists = select_lists_cpu(qdesc64, nprobe);
+        std::vector<uint32_t> lists;
+        {
+            ScopedPhaseTimer timer(phase_totals.list_select_ns);
+            lists = select_lists_cpu(qdesc64, nprobe);
+        }
 
         auto& jobs = jobs_per_q[qi];
         jobs.reserve(lists.size() * 4);
 
-        for (uint32_t lid : lists) {
-            const auto& bp = place_.bucket.at(lid);
-            const uint32_t groups_total = bp.desc_groups;
-            const uint32_t groups = (max_groups_per_list == 0u)
-                ? groups_total
-                : std::min<uint32_t>(groups_total, max_groups_per_list);
+        {
+            ScopedPhaseTimer timer(phase_totals.geo_job_build_ns);
+            for (uint32_t lid : lists) {
+                const auto& bp = place_.bucket.at(lid);
+                const uint32_t groups_total = bp.desc_groups;
+                const uint32_t groups = (max_groups_per_list == 0u)
+                    ? groups_total
+                    : std::min<uint32_t>(groups_total, max_groups_per_list);
 
-            for (uint32_t g = 0; g < groups; ++g) {
-                const MaskRow& geo_xy = get_geo_mask(lid, g);
-                if (!mask_any(geo_xy)) continue;
+                for (uint32_t g = 0; g < groups; ++g) {
+                    const uint32_t geo_idx = geo_index(lid, g);
+                    const MaskRow& geo_xy = get_geo_mask(lid, g);
+                    if (!mask_any(geo_xy)) continue;
 
-                uint16_t bank=0, mat=0, array=0;
-                map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);
+                    uint16_t bank=0, mat=0, array=0;
+                    map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);
 
-                jobs.push_back(DescJob{
-                    static_cast<uint32_t>(qi), lid, g, bank, mat, array, geo_xy
-                });
+                    jobs.push_back(DescJob{
+                        static_cast<uint32_t>(qi), lid, g, bank, mat, array, geo_idx
+                    });
+                }
             }
         }
 
@@ -536,51 +681,51 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     std::array<std::deque<MatWork>, kNumBanks> bank_q{};
     size_t total_work_items = 0;
 
-    for (size_t qi = 0; qi < m; ++qi) {
-        auto& jobs = jobs_per_q[qi];
-        if (jobs.empty()) continue;
+    {
+        ScopedPhaseTimer timer(phase_totals.group_work_ns);
+        for (size_t qi = 0; qi < m; ++qi) {
+            auto& jobs = jobs_per_q[qi];
+            if (jobs.empty()) continue;
 
-        std::sort(jobs.begin(), jobs.end(), [](const DescJob& a, const DescJob& b){
-            if (a.bank != b.bank) return a.bank < b.bank;
-            if (a.mat  != b.mat)  return a.mat  < b.mat;
-            return a.array < b.array;
-        });
-
-        // Create one work item for each contiguous (bank, mat) segment.
-        for (size_t base = 0; base < jobs.size(); ) {
-            const uint16_t bank = jobs[base].bank;
-            const uint16_t mat  = jobs[base].mat;
-
-            size_t end = base;
-            uint32_t array_mask = 0;
-            while (end < jobs.size() && jobs[end].bank == bank && jobs[end].mat == mat) {
-                array_mask |= CimModule::Mask::array(jobs[end].array);
-                ++end;
-            }
-
-            if (bank >= kNumBanks) {
-                throw std::runtime_error("match_one_step: bank out of range (expect 0..15)");
-            }
-
-            bank_q[bank].push_back(MatWork{
-                static_cast<uint32_t>(qi),
-                bank, mat,
-                array_mask,
-                base, end
+            std::sort(jobs.begin(), jobs.end(), [](const DescJob& a, const DescJob& b){
+                if (a.bank != b.bank) return a.bank < b.bank;
+                if (a.mat  != b.mat)  return a.mat  < b.mat;
+                return a.array < b.array;
             });
-            total_work_items++;
 
-            base = end;
+            // Create one work item for each contiguous (bank, mat) segment.
+            for (size_t base = 0; base < jobs.size(); ) {
+                const uint16_t bank = jobs[base].bank;
+                const uint16_t mat  = jobs[base].mat;
+
+                size_t end = base;
+                uint32_t array_mask = 0;
+                while (end < jobs.size() && jobs[end].bank == bank && jobs[end].mat == mat) {
+                    array_mask |= CimModule::Mask::array(jobs[end].array);
+                    ++end;
+                }
+
+                if (bank >= kNumBanks) {
+                    throw std::runtime_error("match_one_step: bank out of range (expect 0..15)");
+                }
+
+                bank_q[bank].push_back(MatWork{
+                    static_cast<uint32_t>(qi),
+                    bank, mat,
+                    array_mask,
+                    base, end
+                });
+                total_work_items++;
+
+                base = end;
+            }
         }
     }
 
     if (total_work_items == 0) {
         return results;
     }
-
-    // Reuse a shared row buffer while issuing commands.
-    std::vector<uint16_t> rows;
-    rows.reserve(kDescBits);
+    const size_t profiled_work_items = total_work_items;
 
     // Phase 3. Round-robin issue across banks:
     //   1. Issue OR commands for all active descriptor dimensions in one work item.
@@ -600,83 +745,87 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
 
             const uint32_t qid = w.qid;
             const uint8_t* qdesc64 = desc_ptr + static_cast<size_t>(qid) * 64u;
+            const auto &active_dims = active_dims_per_q[qid];
 
             auto& jobs   = jobs_per_q[qid];
             auto& planes = planes_per_q[qid];
 
             // A. Issue one OR per non-zero descriptor dimension.
-            for (int d = 0; d < kDescDims; ++d) {
-                if (qdesc64[d] == 0) continue;
-                rows.clear();
-                const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
+            {
+                ScopedPhaseTimer timer(phase_totals.desc_issue_ns);
+                for (size_t packed_idx = 0; packed_idx < active_dims.size(); ++packed_idx) {
+                    const int d = static_cast<int>(active_dims[packed_idx]);
+                    const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
+                    RowQuad rows{};
 
-                for (int b = 0; b < kDescBits; ++b) {
-                    const int qbit = (qv >> b) & 1u;
-                    const uint16_t r = (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
-                    rows.push_back(r);
+                    for (int b = 0; b < kDescBits; ++b) {
+                        const int qbit = (qv >> b) & 1u;
+                        rows[static_cast<size_t>(b)] =
+                            (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
+                    }
+
+                    cim_.OR(rows,
+                            0xffu,
+                            CimModule::Mask::bank(w.bank),
+                            CimModule::Mask::colsAll(),
+                            /*temp_row=*/static_cast<uint16_t>(kDescTempBase + packed_idx),
+                            CimModule::Mask::mat(w.mat),
+                            w.array_mask);
                 }
-
-                cim_.OR(rows,
-                        0xffu,
-                        CimModule::Mask::bank(w.bank),
-                        CimModule::Mask::colsAll(),
-                        /*temp_row=*/static_cast<uint16_t>(kDescTempBase + d),
-                        CimModule::Mask::mat(w.mat),
-                        w.array_mask);
             }
 
             // B. Arrays are already contiguous inside a (bank, mat) work item because
             //    jobs were sorted by bank, mat, array.
-            for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
-                const uint16_t array = jobs[arr_begin].array;
-                size_t arr_end = arr_begin + 1;
-                while (arr_end < w.job_end && jobs[arr_end].array == array) {
-                    ++arr_end;
+            {
+                ScopedPhaseTimer timer(phase_totals.readback_accum_ns);
+                if (active_dims.empty()) {
+                    continue;
                 }
-
-                cim_.copy_temp_block_to_cpu(block64.data(),
-                                            w.bank, w.mat, array,
-                                            kDescTempBase,
-                                            kDescDims);
-
-                // Rows for zero-valued query dimensions were never issued, so make sure
-                // they do not contribute to the mismatch accumulator.
-                for (int d = 0; d < kDescDims; ++d) {
-                    if (qdesc64[d] == 0) {
-                        std::memset(block64.data() + static_cast<size_t>(d) * kRowBytes,
-                                    0,
-                                    kRowBytes);
+                for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
+                    const uint16_t array = jobs[arr_begin].array;
+                    size_t arr_end = arr_begin + 1;
+                    while (arr_end < w.job_end && jobs[arr_end].array == array) {
+                        ++arr_end;
                     }
-                }
 
-                for (size_t ji = arr_begin; ji < arr_end; ++ji) {
-                    planes[ji].add_mask_block_bytes(block64.data(), kRowBytes, kDescDims);
-                }
+                    cim_.copy_temp_block_to_cpu(block64.data(),
+                                                w.bank, w.mat, array,
+                                                kDescTempBase,
+                                                active_dims.size());
 
-                arr_begin = arr_end;
+                    for (size_t ji = arr_begin; ji < arr_end; ++ji) {
+                        planes[ji].add_mask_block_bytes(block64.data(), kRowBytes, active_dims.size());
+                    }
+
+                    arr_begin = arr_end;
+                }
             }
 
             // C. Scan candidate lanes for each finished job.
-            for (size_t ji = w.job_begin; ji < w.job_end; ++ji) {
-                const auto& jb = jobs[ji];
-                const auto& bp = place_.bucket.at(jb.lid);
+            {
+                ScopedPhaseTimer timer(phase_totals.candidate_scan_ns);
+                for (size_t ji = w.job_begin; ji < w.job_end; ++ji) {
+                    const auto& jb = jobs[ji];
+                    const auto& bp = place_.bucket.at(jb.lid);
+                    const MaskRow& geo_xy = geo_masks[jb.geo_mask_idx];
 
-                const uint32_t base_off = bp.posting_off + jb.g * static_cast<uint32_t>(kLanesPerGroup);
-                const uint32_t remain   = (bp.map_count > jb.g * static_cast<uint32_t>(kLanesPerGroup))
-                                        ? (bp.map_count - jb.g * static_cast<uint32_t>(kLanesPerGroup))
-                                        : 0u;
-                const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
+                    const uint32_t base_off = bp.posting_off + jb.g * static_cast<uint32_t>(kLanesPerGroup);
+                    const uint32_t remain   = (bp.map_count > jb.g * static_cast<uint32_t>(kLanesPerGroup))
+                                            ? (bp.map_count - jb.g * static_cast<uint32_t>(kLanesPerGroup))
+                                            : 0u;
+                    const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
 
-                for (uint32_t lane = 0; lane < valid; ++lane) {
-                    if (lane_get_bit(jb.geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
+                    for (uint32_t lane = 0; lane < valid; ++lane) {
+                        if (lane_get_bit(geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
 
-                    const int32_t mid = map_ids[static_cast<size_t>(base_off + lane)];
-                    const uint32_t mis = planes[ji].lane_value(static_cast<int>(lane));
+                        const int32_t mid = map_ids[static_cast<size_t>(base_off + lane)];
+                        const uint32_t mis = planes[ji].lane_value(static_cast<int>(lane));
 
-                    auto& best = results[qid];
-                    if (mis < best.best_mismatch || (mis == best.best_mismatch && mid < best.best_map_id)) {
-                        best.best_mismatch = static_cast<uint8_t>(mis);
-                        best.best_map_id = mid;
+                        auto& best = results[qid];
+                        if (mis < best.best_mismatch || (mis == best.best_mismatch && mid < best.best_map_id)) {
+                            best.best_mismatch = static_cast<uint8_t>(mis);
+                            best.best_map_id = mid;
+                        }
                     }
                 }
             }
@@ -684,6 +833,9 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             total_work_items--;
         }
     }
+
+    phase_totals.total_ns = profileNowNs() - total_start_ns;
+    phase_totals.print(m, profiled_work_items);
 
     return results;
 }

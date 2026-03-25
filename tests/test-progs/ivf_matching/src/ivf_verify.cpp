@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#if defined(inCIM)
+#include "gem5/m5ops.h"
+#endif
+
 #include "cim_api.hpp"
 #include "ivf_cpu_reference.hpp"
 #include "ivf_layout.hpp"
@@ -17,6 +21,32 @@
 #include "query_loader.hpp"
 
 namespace {
+
+#if defined(inCIM)
+static inline void
+begin_roi(uint64_t step_idx)
+{
+    m5_reset_stats(0, 0);
+    m5_work_begin(1, step_idx);
+}
+
+static inline void
+end_roi(uint64_t step_idx)
+{
+    m5_work_end(1, step_idx);
+    m5_dump_stats(0, 0);
+}
+#else
+static inline void
+begin_roi(uint64_t)
+{
+}
+
+static inline void
+end_roi(uint64_t)
+{
+}
+#endif
 
 static std::vector<uint32_t> build_order_centroid_nn(const msim::IvfMapBins& map, uint32_t start = 0u)
 {
@@ -557,8 +587,10 @@ int main()
         for (size_t step_idx = 0; step_idx < query_loader.steps(); ++step_idx) {
             const msim::QueryStepView step = query_loader.step(step_idx);
 
+            begin_roi(static_cast<uint64_t>(step_idx));
             const auto cim_results =
                 matcher.match_one_step(step.gx, step.gy, step.desc_ptr, step.m, kNProbe, kMaxGroupsPerList);
+            end_roi(static_cast<uint64_t>(step_idx));
             const auto cpu_results =
                 msim::match_one_step_cpu_reference(map, step.gx, step.gy, step.desc_ptr, step.m,
                                                    kNProbe, kMaxGroupsPerList);

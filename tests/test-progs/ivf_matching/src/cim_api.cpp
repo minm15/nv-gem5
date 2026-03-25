@@ -263,6 +263,39 @@ CimModule::generateCommand(uint8_t op_type,
 }
 
 void
+CimModule::generateCommand4(uint8_t op_type,
+                            const std::array<uint16_t, 4> &rows,
+                            uint8_t byte_mask,
+                            uint64_t bank_mask,
+                            uint64_t column_mask,
+                            uint16_t dest,
+                            uint32_t mat_mask,
+                            uint32_t array_mask)
+{
+    checkGeometryReady();
+
+    assert(byte_mask != 0);
+
+    CommandEncode c1(this->commandWriteAddress);
+
+    c1.operation_type = op_type;
+    c1.byte_mask = byte_mask;
+    c1.dest = dest;
+
+    c1.bank_mask16 = normalizeBankMask16(bank_mask);
+    c1.mat_mask32 = normalizeMatMask32(mat_mask);
+    c1.array_mask32 = normalizeArrayMask32(array_mask);
+    c1.column_mask = normalizeColumnMask(column_mask);
+
+    c1.operation_flag_mask = 0x0fu;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        c1.row_number[i] = rows[i];
+    }
+
+    c1.issue();
+}
+
+void
 CimModule::AND(const std::vector<uint16_t> &rows,
                uint8_t byte_mask,
                uint64_t bank_mask,
@@ -272,6 +305,18 @@ CimModule::AND(const std::vector<uint16_t> &rows,
                uint32_t array_mask)
 {
     generateCommand(0, rows, byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
+}
+
+void
+CimModule::AND(const std::array<uint16_t, 4> &rows,
+               uint8_t byte_mask,
+               uint64_t bank_mask,
+               uint64_t column_mask,
+               uint16_t dest,
+               uint32_t mat_mask,
+               uint32_t array_mask)
+{
+    generateCommand4(0, rows, byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
 }
 
 void
@@ -287,6 +332,18 @@ CimModule::OR(const std::vector<uint16_t> &rows,
 }
 
 void
+CimModule::OR(const std::array<uint16_t, 4> &rows,
+              uint8_t byte_mask,
+              uint64_t bank_mask,
+              uint64_t column_mask,
+              uint16_t dest,
+              uint32_t mat_mask,
+              uint32_t array_mask)
+{
+    generateCommand4(1, rows, byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
+}
+
+void
 CimModule::XOR(const std::vector<uint16_t> &rows,
                uint8_t byte_mask,
                uint64_t bank_mask,
@@ -296,6 +353,18 @@ CimModule::XOR(const std::vector<uint16_t> &rows,
                uint32_t array_mask)
 {
     generateCommand(2, rows, byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
+}
+
+void
+CimModule::XOR(const std::array<uint16_t, 4> &rows,
+               uint8_t byte_mask,
+               uint64_t bank_mask,
+               uint64_t column_mask,
+               uint16_t dest,
+               uint32_t mat_mask,
+               uint32_t array_mask)
+{
+    generateCommand4(2, rows, byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
 }
 
 void

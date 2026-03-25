@@ -4,6 +4,7 @@
 #include "ivf_layout.hpp"
 #include "msim_config.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -17,6 +18,8 @@ struct MatchResult {
 class IvfMatcher {
 public:
     using MaskRow = std::array<uint8_t, kRowBytes>;
+    static constexpr size_t kGeoSweepWidth =
+        static_cast<size_t>(2 * kGeoProbeRadius + 1);
 
     struct Planes {
         // enough bits to count mismatches up to 64 (6 bits). keep 8 planes for safety.
@@ -48,7 +51,14 @@ private:
     std::vector<uint32_t> select_lists_cpu(const uint8_t* qdesc64, uint32_t nprobe) const;
 
     // geo / desc compute on a single list
-    void geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket, uint8_t qgx, uint8_t qgy, MaskRow& out_mask_xy);
+    void geo_eq_masks_xy(
+        uint32_t bucket_id,
+        uint32_t group_in_bucket,
+        uint8_t qgx,
+        uint8_t qgy,
+        const std::array<uint8_t, kGeoSweepWidth>& gx_vals,
+        const std::array<uint8_t, kGeoSweepWidth>& gy_vals,
+        MaskRow& out_mask_xy);
     MaskRow geo_eq_mask_axis(uint32_t bucket_id, uint32_t group_in_bucket, bool is_x, uint8_t v);
 
     void desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_bucket, const uint8_t* qdesc64, Planes& out_planes);

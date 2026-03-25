@@ -60,8 +60,9 @@ APP_SRCS_VERIFY := \
   src/ivf_cpu_reference.cpp
 
 # --- Flags ---
+PROFILE_FLAGS ?= -DIVF_PHASE_PROFILE=1
 CXXFLAGS_COMMON := -O3 -DNDEBUG -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DSTD_PRINT_OUTPUT
-CXXFLAGS_CIM    := $(CXXFLAGS_COMMON) -DinCIM=1
+CXXFLAGS_CIM    := $(CXXFLAGS_COMMON) -DinCIM=1 $(PROFILE_FLAGS)
 CXXFLAGS_TEST   := -O2 -DNDEBUG -Iinclude -std=gnu++17
 CXXFLAGS_VERIFY := $(CXXFLAGS_CIM) \
 	-DMSIM_MAP_DIR=\"$(abspath test/map)\" \

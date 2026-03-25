@@ -1,6 +1,7 @@
 #ifndef __CIM_API__HPP__
 #define __CIM_API__HPP__
 
+#include <array>
 #include <cinttypes>
 #include <cstdio>
 #include <cassert>
@@ -107,6 +108,16 @@ class CimModule
         uint32_t mat_mask,
         uint32_t array_mask);
 
+    void generateCommand4(
+        uint8_t op_type,
+        const std::array<uint16_t, 4> &rows,
+        uint8_t byte_mask,
+        uint64_t bank_mask,
+        uint64_t column_mask,
+        uint16_t dest,
+        uint32_t mat_mask,
+        uint32_t array_mask);
+
   public:
     struct Mask
     {
@@ -143,6 +154,15 @@ class CimModule
         uint32_t mat_mask = 0xffffffffu,
         uint32_t array_mask = 0xffffffffu);
 
+    void AND(
+        const std::array<uint16_t, 4> &rows,
+        uint8_t byte_mask = 0xffu,
+        uint64_t bank_mask = kAllOnes64,
+        uint64_t column_mask = kAllOnes64,
+        uint16_t dest = 0x0000u,
+        uint32_t mat_mask = 0xffffffffu,
+        uint32_t array_mask = 0xffffffffu);
+
     void OR(
         const std::vector<uint16_t> &rows,
         uint8_t byte_mask = 0xffu,
@@ -152,8 +172,26 @@ class CimModule
         uint32_t mat_mask = 0xffffffffu,
         uint32_t array_mask = 0xffffffffu);
 
+    void OR(
+        const std::array<uint16_t, 4> &rows,
+        uint8_t byte_mask = 0xffu,
+        uint64_t bank_mask = kAllOnes64,
+        uint64_t column_mask = kAllOnes64,
+        uint16_t dest = 0x0000u,
+        uint32_t mat_mask = 0xffffffffu,
+        uint32_t array_mask = 0xffffffffu);
+
     void XOR(
         const std::vector<uint16_t> &rows,
+        uint8_t byte_mask = 0xffu,
+        uint64_t bank_mask = kAllOnes64,
+        uint64_t column_mask = kAllOnes64,
+        uint16_t dest = 0x0000u,
+        uint32_t mat_mask = 0xffffffffu,
+        uint32_t array_mask = 0xffffffffu);
+
+    void XOR(
+        const std::array<uint16_t, 4> &rows,
         uint8_t byte_mask = 0xffu,
         uint64_t bank_mask = kAllOnes64,
         uint64_t column_mask = kAllOnes64,
