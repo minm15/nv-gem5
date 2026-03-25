@@ -536,6 +536,30 @@ CimModule::copy_to_cim(uint16_t bank,
 }
 
 void
+CimModule::copy_rows_to_cim(uint16_t bank,
+                            uint16_t mat,
+                            uint16_t array,
+                            uint16_t start_row,
+                            const void* cpu_array,
+                            size_t num_rows)
+{
+    checkGeometryReady();
+    if (num_rows == 0u) throw std::runtime_error("cim_api_emu: num_rows must be positive");
+    validate_row_index(start_row, rowBits);
+
+    const size_t row_bytes = static_cast<size_t>(1ull << columnBits);
+    const size_t rows_per_region = static_cast<size_t>(1ull << rowBits);
+    if (static_cast<size_t>(start_row) + num_rows > rows_per_region) {
+        throw std::runtime_error("cim_api_emu: row block exceeds region");
+    }
+
+    auto& region = region_buffer(rwStorage_, RegionKey{bank, mat, array}, rows_per_region, row_bytes);
+    std::memcpy(region.data() + static_cast<size_t>(start_row) * row_bytes,
+                cpu_array,
+                row_bytes * num_rows);
+}
+
+void
 CimModule::copy_to_cpu(void* cpu_array,
                        uint16_t bank,
                        uint16_t mat,

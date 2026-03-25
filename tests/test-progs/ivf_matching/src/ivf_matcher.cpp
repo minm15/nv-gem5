@@ -125,6 +125,9 @@ using RowQuad = std::array<uint16_t, 4>;
 using GeoValueArray = std::array<uint8_t, IvfMatcher::kGeoSweepWidth>;
 using GeoMaskArray = std::array<IvfMatcher::MaskRow, IvfMatcher::kGeoSweepWidth>;
 using GeoTempBlock = std::array<uint8_t, 2 * IvfMatcher::kGeoSweepWidth * kRowBytes>;
+using WordRow = std::array<uint64_t, kRowBytes / sizeof(uint64_t)>;
+
+static_assert((kRowBytes % sizeof(uint64_t)) == 0, "kRowBytes must be word-aligned");
 
 static inline uint64_t
 load_u64(const uint8_t *src)
@@ -305,25 +308,22 @@ void IvfMatcher::Planes::add_mask(const MaskRow& x)
 
 void IvfMatcher::Planes::add_mask_row_bytes(const uint8_t* row_bytes)
 {
-    MaskRow carry{};
-    std::memcpy(carry.data(), row_bytes, carry.size());
+    WordRow carry_storage{};
+    WordRow next_storage{};
+    std::memcpy(carry_storage.data(), row_bytes, kRowBytes);
+
+    WordRow *carry = &carry_storage;
+    WordRow *next = &next_storage;
 
     for (size_t k = 0; k < b.size(); ++k) {
-        MaskRow new_carry{};
-        size_t i = 0;
-        for (; i + sizeof(uint64_t) <= carry.size(); i += sizeof(uint64_t)) {
-            const uint64_t bk = load_u64(b[k].data() + i);
-            const uint64_t c = load_u64(carry.data() + i);
-            store_u64(b[k].data() + i, bk ^ c);
-            store_u64(new_carry.data() + i, bk & c);
+        for (size_t w = 0; w < carry->size(); ++w) {
+            const size_t byte_off = w * sizeof(uint64_t);
+            const uint64_t bk = load_u64(b[k].data() + byte_off);
+            const uint64_t c = (*carry)[w];
+            store_u64(b[k].data() + byte_off, bk ^ c);
+            (*next)[w] = bk & c;
         }
-        for (; i < carry.size(); ++i) {
-            const uint8_t bk = b[k][i];
-            const uint8_t c  = carry[i];
-            b[k][i] = static_cast<uint8_t>(bk ^ c);
-            new_carry[i] = static_cast<uint8_t>(bk & c);
-        }
-        carry = new_carry;
+        std::swap(carry, next);
     }
 }
 
@@ -331,8 +331,9 @@ void IvfMatcher::Planes::add_mask_block_bytes(const uint8_t* base,
                                               size_t stride_bytes,
                                               size_t num_rows)
 {
-    for (size_t r = 0; r < num_rows; ++r) {
-        add_mask_row_bytes(base + r * stride_bytes);
+    const uint8_t *row_ptr = base;
+    for (size_t r = 0; r < num_rows; ++r, row_ptr += stride_bytes) {
+        add_mask_row_bytes(row_ptr);
     }
 }
 

@@ -228,6 +228,14 @@ class CimModule
         void *cpu_array,
         size_t size_in_byte);
 
+    void copy_rows_to_cim(
+        uint16_t bank,
+        uint16_t mat,
+        uint16_t array,
+        uint16_t start_row,
+        const void *cpu_array,
+        size_t num_rows);
+
     void copy_to_cpu(
         void *cpu_array,
         uint16_t bank,

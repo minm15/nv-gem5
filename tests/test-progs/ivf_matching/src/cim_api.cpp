@@ -452,6 +452,28 @@ CimModule::copy_to_cim(uint16_t bank,
     do_pseudo_pull(cpu_array, base + offs, size_in_byte);
 }
 
+void
+CimModule::copy_rows_to_cim(uint16_t bank,
+                            uint16_t mat,
+                            uint16_t array,
+                            uint16_t start_row,
+                            const void *cpu_array,
+                            size_t num_rows)
+{
+    checkGeometryReady();
+
+    assert(cpu_array != nullptr);
+    assert(readWriteAddress != nullptr);
+    assert(num_rows > 0);
+    assert(start_row < (1u << rowBits));
+    assert(static_cast<size_t>(start_row) + num_rows <= (1ull << rowBits));
+
+    const size_t row_bytes = static_cast<size_t>(1ull << columnBits);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(readWriteAddress);
+    const uintptr_t offs = calcRegionOffsetBytes(bank, mat, array, start_row);
+    do_pseudo_pull(cpu_array, base + offs, row_bytes * num_rows);
+}
+
 // void
 // CimModule::copy_to_cpu(void *cpu_array,
 //                        uint16_t bank,

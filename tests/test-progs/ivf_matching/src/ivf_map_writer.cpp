@@ -3,6 +3,7 @@
 #include "msim_config.hpp"
 #include <array>
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 
 namespace msim {
@@ -18,7 +19,10 @@ static inline uint8_t q4_bit(uint8_t q4, int b)
 }
 
 IvfMapWriter::IvfMapWriter(CimModule& cim, const IvfPlacement& place)
-    : cim_(cim), place_(place)
+    : cim_(cim),
+      place_(place),
+      desc_block_(static_cast<size_t>(kDescRowsPerGroup) * kRowBytes, 0u),
+      geo_block_(static_cast<size_t>(kGeoRowsPerGroup) * kRowBytes, 0u)
 {
 }
 
@@ -34,7 +38,9 @@ void IvfMapWriter::write_desc_bucket_group(const IvfMapBins& map, uint32_t bucke
                             : 0u;
     const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
 
+    std::fill(desc_block_.begin(), desc_block_.end(), 0u);
     std::array<uint8_t, kRowBytes> row{};
+    auto* const block_base = desc_block_.data();
 
     for (int d = 0; d < kDescDims; ++d) {
         for (int b = 0; b < kDescBits; ++b) {
@@ -52,7 +58,9 @@ void IvfMapWriter::write_desc_bucket_group(const IvfMapBins& map, uint32_t bucke
                 }
                 lane_set_bit(row.data(), static_cast<int>(lane), bitv);
             }
-            cim_.copy_to_cim(bank, mat, array, r_true, row.data(), kRowBytes);
+            std::memcpy(block_base + static_cast<size_t>(r_true) * kRowBytes,
+                        row.data(),
+                        kRowBytes);
 
             // inv row
             row.fill(0);
@@ -65,9 +73,13 @@ void IvfMapWriter::write_desc_bucket_group(const IvfMapBins& map, uint32_t bucke
                 }
                 lane_set_bit(row.data(), static_cast<int>(lane), bitv);
             }
-            cim_.copy_to_cim(bank, mat, array, r_inv, row.data(), kRowBytes);
+            std::memcpy(block_base + static_cast<size_t>(r_inv) * kRowBytes,
+                        row.data(),
+                        kRowBytes);
         }
     }
+
+    cim_.copy_rows_to_cim(bank, mat, array, /*start_row=*/0, desc_block_.data(), kDescRowsPerGroup);
 }
 
 void IvfMapWriter::write_geo_bucket_group(const IvfMapBins& map, uint32_t bucket_id, uint32_t group_in_bucket)
@@ -82,7 +94,9 @@ void IvfMapWriter::write_geo_bucket_group(const IvfMapBins& map, uint32_t bucket
                             : 0u;
     const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
 
+    std::fill(geo_block_.begin(), geo_block_.end(), 0u);
     std::array<uint8_t, kRowBytes> row{};
+    auto* const block_base = geo_block_.data();
 
     auto write_one_row = [&](uint16_t rid_row, bool is_x, bool high, int bit, bool inv) {
         row.fill(0);
@@ -100,7 +114,9 @@ void IvfMapWriter::write_geo_bucket_group(const IvfMapBins& map, uint32_t bucket
             }
             lane_set_bit(row.data(), static_cast<int>(lane), bitv);
         }
-        cim_.copy_to_cim(bank, mat, array, static_cast<uint16_t>(row_base + rid_row), row.data(), kRowBytes);
+        std::memcpy(block_base + static_cast<size_t>(rid_row) * kRowBytes,
+                    row.data(),
+                    kRowBytes);
     };
 
     for (int b = 0; b < 4; ++b) {
@@ -114,6 +130,8 @@ void IvfMapWriter::write_geo_bucket_group(const IvfMapBins& map, uint32_t bucket
         write_one_row(geo_y_row_high(b, false), false, true,  b, false);
         write_one_row(geo_y_row_high(b, true),  false, true,  b, true);
     }
+
+    cim_.copy_rows_to_cim(bank, mat, array, row_base, geo_block_.data(), kGeoRowsPerGroup);
 }
 
 void IvfMapWriter::write_all(const IvfMapBins& map)

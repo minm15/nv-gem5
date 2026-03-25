@@ -2,6 +2,7 @@
 #include "cim_api.hpp"
 #include "ivf_bins.hpp"
 #include "ivf_layout.hpp"
+#include <vector>
 
 namespace msim {
 
@@ -18,6 +19,8 @@ private:
 private:
     CimModule& cim_;
     const IvfPlacement& place_;
+    std::vector<uint8_t> desc_block_;
+    std::vector<uint8_t> geo_block_;
 };
 
 } // namespace msim
