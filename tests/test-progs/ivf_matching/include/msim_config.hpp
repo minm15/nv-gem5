@@ -5,11 +5,11 @@
 namespace msim {
 
 #ifndef MSIM_MAP_DIR
-#define MSIM_MAP_DIR "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/map"
+#define MSIM_MAP_DIR "tests/test-progs/export_gem5/ivf_matching/2013-01-10/map"
 #endif
 
 #ifndef MSIM_QUERY_DIR
-#define MSIM_QUERY_DIR "/home/kaiii/nas/homes/kaiii_data/export_gem5_dir/export_gem5_512_8/2013-01-10/query"
+#define MSIM_QUERY_DIR "tests/test-progs/export_gem5/ivf_matching/2013-01-10/query"
 #endif
 
 static constexpr const char* kMapDir   = MSIM_MAP_DIR;

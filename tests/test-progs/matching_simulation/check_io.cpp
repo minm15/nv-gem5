@@ -11,8 +11,8 @@
 
 namespace fs = std::filesystem;
 
-static const std::string MAP_DIR   = "/home/kaiii/nas/homes/kaiii_data/export_gem5/2013-01-10/map";
-static const std::string QUERY_DIR = "/home/kaiii/nas/homes/kaiii_data/export_gem5/2013-01-10/query";
+static const std::string MAP_DIR   = "tests/test-progs/export_gem5/kdtree_matching/2013-01-10/map";
+static const std::string QUERY_DIR = "tests/test-progs/export_gem5/kdtree_matching/2013-01-10/query";
 
 struct BinMeta {
     std::string key;     // e.g. "map_desc_q4"
