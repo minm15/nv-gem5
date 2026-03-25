@@ -240,7 +240,7 @@ static void fill_query_halves(std::vector<uint8_t>& query_desc,
 int main()
 {
     try {
-        const fs::path root_dir = fs::path("test");
+        const fs::path root_dir = fs::path("../export_gem5/test_data");
         const fs::path map_dir = root_dir / "map";
         const fs::path query_dir = root_dir / "query";
 

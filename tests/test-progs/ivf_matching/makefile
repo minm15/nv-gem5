@@ -65,8 +65,8 @@ CXXFLAGS_COMMON := -DNDEBUG -Iinclude -I$(M5_INC_CONT) -std=gnu++17 -DSTD_PRINT_
 CXXFLAGS_CIM    := -O2 $(CXXFLAGS_COMMON) -DinCIM=1 $(PROFILE_FLAGS)
 CXXFLAGS_TEST   := -O2 -DNDEBUG -Iinclude -std=gnu++17
 CXXFLAGS_VERIFY := $(CXXFLAGS_CIM) \
-	-DMSIM_MAP_DIR=\"$(abspath test/map)\" \
-	-DMSIM_QUERY_DIR=\"$(abspath test/query)\"
+	-DMSIM_MAP_DIR=\"tests/test-progs/export_gem5/test_data/map\" \
+	-DMSIM_QUERY_DIR=\"tests/test-progs/export_gem5/test_data/query\"
 
 LDFLAGS := -static
 LDLIBS  := $(M5_LIB_CONT)
