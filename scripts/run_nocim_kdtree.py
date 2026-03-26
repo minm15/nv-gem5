@@ -1,3 +1,11 @@
+import os
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+GEM5_ROOT = os.path.dirname(SCRIPT_DIR)
+if GEM5_ROOT not in sys.path:
+    sys.path.insert(0, GEM5_ROOT)
+
 import m5
 from m5.objects import *
 
@@ -106,18 +114,9 @@ system.cpu.createInterruptController()
 binary = "./tests/test-progs/simulation_kdtree/bin/pf_kernel_roi"
 map_path = "./tests/test-progs/simulation_kdtree/pf_export/map.bin"
 frames_path = "./tests/test-progs/simulation_kdtree/pf_export/frames.bin"  
-mcl_path = "/home/kaiii/tmp/pfivf_roi.bin"
-
-ivf_bin = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/ivf_nocim_matching/bin/pf_kernel_roi"
-ivf_map_path = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/export_gem5/2013-01-10/map"
-ivf_query_path = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/export_gem5/2013-01-10/query"
-
-hello_binary = "/home/kaiii/NVMSimulation/simulator/gem5/tests/test-progs/hello/bin/arm/linux/hello"
-
 
 process = Process()
 process.cmd = [binary, map_path, frames_path]
-# process.cmd = [ivf_bin, ivf_map_path, ivf_query_path]
 system.cpu.workload = process
 system.cpu.createThreads()
 system.workload = SEWorkload.init_compatible(ivf_bin)

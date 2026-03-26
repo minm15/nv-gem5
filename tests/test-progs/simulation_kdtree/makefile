@@ -9,8 +9,8 @@ M5_LIB_CONT  := /work/util/m5/build/arm64/out/libm5.a
 DOCKCROSS_IMAGE ?= dockcross/linux-arm64:latest
 
 OUT := bin/pf_kernel_roi
-# SRCS := main.cpp
-SRCS := data_wo_cim.cpp
+SRCS := main.cpp
+# SRCS := data_wo_cim.cpp
 
 CXXFLAGS := -DNDEBUG -std=gnu++17 -DUSE_M5 \
             -I. -I$(M5_INC_CONT)

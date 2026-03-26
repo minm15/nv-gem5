@@ -779,26 +779,25 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             //    jobs were sorted by bank, mat, array.
             {
                 ScopedPhaseTimer timer(phase_totals.readback_accum_ns);
-                if (active_dims.empty()) {
-                    continue;
-                }
-                for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
-                    const uint16_t array = jobs[arr_begin].array;
-                    size_t arr_end = arr_begin + 1;
-                    while (arr_end < w.job_end && jobs[arr_end].array == array) {
-                        ++arr_end;
+                if (!active_dims.empty()) {
+                    for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
+                        const uint16_t array = jobs[arr_begin].array;
+                        size_t arr_end = arr_begin + 1;
+                        while (arr_end < w.job_end && jobs[arr_end].array == array) {
+                            ++arr_end;
+                        }
+
+                        cim_.copy_temp_block_to_cpu(block64.data(),
+                                                    w.bank, w.mat, array,
+                                                    kDescTempBase,
+                                                    active_dims.size());
+
+                        for (size_t ji = arr_begin; ji < arr_end; ++ji) {
+                            planes[ji].add_mask_block_bytes(block64.data(), kRowBytes, active_dims.size());
+                        }
+
+                        arr_begin = arr_end;
                     }
-
-                    cim_.copy_temp_block_to_cpu(block64.data(),
-                                                w.bank, w.mat, array,
-                                                kDescTempBase,
-                                                active_dims.size());
-
-                    for (size_t ji = arr_begin; ji < arr_end; ++ji) {
-                        planes[ji].add_mask_block_bytes(block64.data(), kRowBytes, active_dims.size());
-                    }
-
-                    arr_begin = arr_end;
                 }
             }
 
