@@ -143,6 +143,20 @@ store_u64(uint8_t *dst, uint64_t value)
     std::memcpy(dst, &value, sizeof(value));
 }
 
+static inline uint8_t
+count_mismatch_rows_for_lane(const uint8_t* row_block,
+                             size_t num_rows,
+                             size_t byte_index,
+                             uint8_t lane_mask)
+{
+    uint8_t mismatch = 0u;
+    const uint8_t* row_ptr = row_block + byte_index;
+    for (size_t row = 0; row < num_rows; ++row, row_ptr += kRowBytes) {
+        mismatch = static_cast<uint8_t>(mismatch + ((*row_ptr & lane_mask) != 0u ? 1u : 0u));
+    }
+    return mismatch;
+}
+
 static inline GeoValueArray
 build_geo_probe_values(uint8_t center, uint8_t geo_max)
 {
@@ -624,9 +638,10 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
         return geo_masks[idx];
     };
 
-    // Per-query work queues and bit-sliced accumulators.
+    // Per-query work queues. Descriptor mismatches are counted directly from the
+    // read-back temp rows, which is significantly cheaper in no-opt builds than
+    // maintaining bit-sliced accumulators and reconstructing lane values later.
     std::vector<std::vector<DescJob>> jobs_per_q(m);
-    std::vector<std::vector<Planes>>  planes_per_q(m);
     std::vector<std::vector<uint8_t>> active_dims_per_q(m);
 
     // Phase 1. Build jobs after list selection and geo filtering.
@@ -672,10 +687,6 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 }
             }
         }
-
-        // Keep one accumulator per job.
-        planes_per_q[qi].resize(jobs.size());
-        for (auto& p : planes_per_q[qi]) p.clear();
     }
 
     // Phase 2. Group each query into bank/mat work items.
@@ -724,15 +735,16 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     }
 
     if (total_work_items == 0) {
+        phase_totals.total_ns = profileNowNs() - total_start_ns;
+        phase_totals.print(m, 0u);
         return results;
     }
     const size_t profiled_work_items = total_work_items;
 
     // Phase 3. Round-robin issue across banks:
     //   1. Issue OR commands for all active descriptor dimensions in one work item.
-    //   2. Read back the 64 temp rows once per array.
-    //   3. Feed the rows into the per-job bit-sliced accumulators.
-    //   4. Scan the valid lanes and update the best result.
+    //   2. Read back the temp rows once per array.
+    //   3. Count mismatches directly from those rows and update the best result.
     std::vector<uint8_t> block64(static_cast<size_t>(kDescDims) * kRowBytes);
 
     const int32_t* const map_ids = map_.postings.map_ids.data();
@@ -747,14 +759,14 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             const uint32_t qid = w.qid;
             const uint8_t* qdesc64 = desc_ptr + static_cast<size_t>(qid) * 64u;
             const auto &active_dims = active_dims_per_q[qid];
+            const size_t active_dim_count = active_dims.size();
 
-            auto& jobs   = jobs_per_q[qid];
-            auto& planes = planes_per_q[qid];
+            auto& jobs = jobs_per_q[qid];
 
             // A. Issue one OR per non-zero descriptor dimension.
             {
                 ScopedPhaseTimer timer(phase_totals.desc_issue_ns);
-                for (size_t packed_idx = 0; packed_idx < active_dims.size(); ++packed_idx) {
+                for (size_t packed_idx = 0; packed_idx < active_dim_count; ++packed_idx) {
                     const int d = static_cast<int>(active_dims[packed_idx]);
                     const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
                     RowQuad rows{};
@@ -775,59 +787,75 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                 }
             }
 
-            // B. Arrays are already contiguous inside a (bank, mat) work item because
-            //    jobs were sorted by bank, mat, array.
-            {
-                ScopedPhaseTimer timer(phase_totals.readback_accum_ns);
-                if (!active_dims.empty()) {
-                    for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
-                        const uint16_t array = jobs[arr_begin].array;
-                        size_t arr_end = arr_begin + 1;
-                        while (arr_end < w.job_end && jobs[arr_end].array == array) {
-                            ++arr_end;
+            // B/C. Arrays are already contiguous inside a (bank, mat) work item
+            // because jobs were sorted by bank, mat, array. Read back one array at
+            // a time, then count mismatches directly from the temp rows.
+            for (size_t arr_begin = w.job_begin; arr_begin < w.job_end; ) {
+                const uint16_t array = jobs[arr_begin].array;
+                size_t arr_end = arr_begin + 1;
+                while (arr_end < w.job_end && jobs[arr_end].array == array) {
+                    ++arr_end;
+                }
+
+                if (active_dim_count != 0u) {
+                    ScopedPhaseTimer timer(phase_totals.readback_accum_ns);
+                    cim_.copy_temp_block_to_cpu(block64.data(),
+                                                w.bank, w.mat, array,
+                                                kDescTempBase,
+                                                active_dim_count);
+                }
+
+                {
+                    ScopedPhaseTimer timer(phase_totals.candidate_scan_ns);
+                    for (size_t ji = arr_begin; ji < arr_end; ++ji) {
+                        const auto& jb = jobs[ji];
+                        const auto& bp = place_.bucket.at(jb.lid);
+                        const MaskRow& geo_xy = geo_masks[jb.geo_mask_idx];
+
+                        const uint32_t base_off = bp.posting_off + jb.g * static_cast<uint32_t>(kLanesPerGroup);
+                        const uint32_t remain   = (bp.map_count > jb.g * static_cast<uint32_t>(kLanesPerGroup))
+                                                ? (bp.map_count - jb.g * static_cast<uint32_t>(kLanesPerGroup))
+                                                : 0u;
+                        const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
+                        const uint32_t valid_bytes = ceil_div_u32(valid, 8u);
+
+                        for (uint32_t byte_index = 0; byte_index < valid_bytes; ++byte_index) {
+                            uint8_t candidate_mask = geo_xy[byte_index];
+                            if (candidate_mask == 0u) continue;
+
+                            const uint32_t lane_base = byte_index * 8u;
+                            if (lane_base + 8u > valid) {
+                                const uint32_t tail_bits = valid - lane_base;
+                                candidate_mask = static_cast<uint8_t>(
+                                    candidate_mask & static_cast<uint8_t>((1u << tail_bits) - 1u));
+                                if (candidate_mask == 0u) continue;
+                            }
+
+                            for (uint32_t bit = 0; bit < 8u; ++bit) {
+                                const uint8_t lane_mask = static_cast<uint8_t>(1u << bit);
+                                if ((candidate_mask & lane_mask) == 0u) continue;
+
+                                const uint32_t lane = lane_base + bit;
+                                const int32_t mid = map_ids[static_cast<size_t>(base_off + lane)];
+                                const uint8_t mis = (active_dim_count == 0u)
+                                    ? 0u
+                                    : count_mismatch_rows_for_lane(
+                                        block64.data(),
+                                        active_dim_count,
+                                        static_cast<size_t>(byte_index),
+                                        lane_mask);
+
+                                auto& best = results[qid];
+                                if (mis < best.best_mismatch || (mis == best.best_mismatch && mid < best.best_map_id)) {
+                                    best.best_mismatch = mis;
+                                    best.best_map_id = mid;
+                                }
+                            }
                         }
-
-                        cim_.copy_temp_block_to_cpu(block64.data(),
-                                                    w.bank, w.mat, array,
-                                                    kDescTempBase,
-                                                    active_dims.size());
-
-                        for (size_t ji = arr_begin; ji < arr_end; ++ji) {
-                            planes[ji].add_mask_block_bytes(block64.data(), kRowBytes, active_dims.size());
-                        }
-
-                        arr_begin = arr_end;
                     }
                 }
-            }
 
-            // C. Scan candidate lanes for each finished job.
-            {
-                ScopedPhaseTimer timer(phase_totals.candidate_scan_ns);
-                for (size_t ji = w.job_begin; ji < w.job_end; ++ji) {
-                    const auto& jb = jobs[ji];
-                    const auto& bp = place_.bucket.at(jb.lid);
-                    const MaskRow& geo_xy = geo_masks[jb.geo_mask_idx];
-
-                    const uint32_t base_off = bp.posting_off + jb.g * static_cast<uint32_t>(kLanesPerGroup);
-                    const uint32_t remain   = (bp.map_count > jb.g * static_cast<uint32_t>(kLanesPerGroup))
-                                            ? (bp.map_count - jb.g * static_cast<uint32_t>(kLanesPerGroup))
-                                            : 0u;
-                    const uint32_t valid    = std::min<uint32_t>(static_cast<uint32_t>(kLanesPerGroup), remain);
-
-                    for (uint32_t lane = 0; lane < valid; ++lane) {
-                        if (lane_get_bit(geo_xy.data(), static_cast<int>(lane)) == 0u) continue;
-
-                        const int32_t mid = map_ids[static_cast<size_t>(base_off + lane)];
-                        const uint32_t mis = planes[ji].lane_value(static_cast<int>(lane));
-
-                        auto& best = results[qid];
-                        if (mis < best.best_mismatch || (mis == best.best_mismatch && mid < best.best_map_id)) {
-                            best.best_mismatch = static_cast<uint8_t>(mis);
-                            best.best_map_id = mid;
-                        }
-                    }
-                }
+                arr_begin = arr_end;
             }
 
             total_work_items--;

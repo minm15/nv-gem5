@@ -351,6 +351,19 @@ CimModule::AND(const std::vector<uint16_t>& rows,
 }
 
 void
+CimModule::AND(const std::array<uint16_t, 4>& rows,
+               uint8_t byte_mask,
+               uint64_t bank_mask,
+               uint64_t column_mask,
+               uint16_t dest,
+               uint32_t mat_mask,
+               uint32_t array_mask)
+{
+    AND(std::vector<uint16_t>(rows.begin(), rows.end()),
+        byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
+}
+
+void
 CimModule::OR(const std::vector<uint16_t>& rows,
               uint8_t byte_mask,
               uint64_t bank_mask,
@@ -375,6 +388,19 @@ CimModule::OR(const std::vector<uint16_t>& rows,
 }
 
 void
+CimModule::OR(const std::array<uint16_t, 4>& rows,
+              uint8_t byte_mask,
+              uint64_t bank_mask,
+              uint64_t column_mask,
+              uint16_t dest,
+              uint32_t mat_mask,
+              uint32_t array_mask)
+{
+    OR(std::vector<uint16_t>(rows.begin(), rows.end()),
+       byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
+}
+
+void
 CimModule::XOR(const std::vector<uint16_t>& rows,
                uint8_t byte_mask,
                uint64_t bank_mask,
@@ -396,6 +422,19 @@ CimModule::XOR(const std::vector<uint16_t>& rows,
                 rowBits,
                 columnBits,
                 rows, byte_mask, col_sel, dest);
+}
+
+void
+CimModule::XOR(const std::array<uint16_t, 4>& rows,
+               uint8_t byte_mask,
+               uint64_t bank_mask,
+               uint64_t column_mask,
+               uint16_t dest,
+               uint32_t mat_mask,
+               uint32_t array_mask)
+{
+    XOR(std::vector<uint16_t>(rows.begin(), rows.end()),
+        byte_mask, bank_mask, column_mask, dest, mat_mask, array_mask);
 }
 
 void
