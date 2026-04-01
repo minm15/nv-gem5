@@ -54,6 +54,7 @@
 #include "debug/CacheVerbose.hh"
 #include "debug/HWPrefetch.hh"
 #include "debug/CIMDBG.hh"
+#include "mem/abstract_mem.hh"
 #include "mem/cache/compressors/base.hh"
 #include "mem/cache/mshr.hh"
 #include "mem/cache/prefetch/base.hh"
@@ -100,6 +101,7 @@ BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
       forwardLatency(p.tag_latency),
       fillLatency(p.data_latency),
       responseLatency(p.response_latency),
+      accessRequestLatency(p.access_request_latency),
       sequentialAccess(p.sequential_access),
       numTarget(p.tgts_per_mshr),
       forwardSnoops(true),
@@ -198,6 +200,30 @@ BaseCache::init()
         fatal("Cache ports on %s are not connected\n", name());
     cpuSidePort.sendRangeChange();
     forwardSnoops = cpuSidePort.isSnooping();
+    if (hasAnyCimHandler()) {
+        accessRequestLatency = Cycles(0);
+    }
+}
+
+bool
+BaseCache::hasAnyCimHandler() const
+{
+#ifdef CDNCcimFlag
+    for (const auto *memory : system->params().memories) {
+        if (memory != nullptr && !memory->cimHandlerList.empty()) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+void
+BaseCache::applyAccessRequestLatency(PacketPtr pkt) const
+{
+    if (accessRequestLatency != Cycles(0)) {
+        pkt->headerDelay += cyclesToTicks(accessRequestLatency);
+    }
 }
 
 Port &
@@ -2584,12 +2610,14 @@ BaseCache::CpuSidePort::recvTimingReq(PacketPtr pkt)
     assert(pkt->isRequest());
 
     if (cache.system->bypassCaches()) {
+        cache.applyAccessRequestLatency(pkt);
         // Just forward the packet if caches are disabled.
         // @todo This should really enqueue the packet rather
         [[maybe_unused]] bool success = cache.memSidePort.sendTimingReq(pkt);
         assert(success);
         return true;
     } else if (tryTiming(pkt)) {
+        cache.applyAccessRequestLatency(pkt);
         cache.recvTimingReq(pkt);
         return true;
     }

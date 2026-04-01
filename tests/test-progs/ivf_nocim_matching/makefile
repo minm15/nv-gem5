@@ -11,7 +11,7 @@ DOCKCROSS_IMAGE ?= dockcross/linux-arm64:latest
 OUT := bin/pf_kernel_roi
 SRCS := src/main.cpp
 
-CXXFLAGS := -DNDEBUG -std=gnu++17 -DUSE_M5 \
+CXXFLAGS := -O1 -DNDEBUG -std=gnu++17 -DUSE_M5 \
             -I. -I$(M5_INC_CONT)
 LDFLAGS  := -static
 LDLIBS   := $(M5_LIB_CONT)

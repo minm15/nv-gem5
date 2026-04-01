@@ -119,7 +119,7 @@ process = Process()
 process.cmd = [binary, map_path, frames_path]
 system.cpu.workload = process
 system.cpu.createThreads()
-system.workload = SEWorkload.init_compatible(ivf_bin)
+system.workload = SEWorkload.init_compatible(binary)
 
 # ----------------------------------------------------------------
 # 10. Run

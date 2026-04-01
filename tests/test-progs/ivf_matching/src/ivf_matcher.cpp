@@ -43,6 +43,9 @@ struct MatchPhaseTotals
     uint64_t total_ns = 0;
     uint64_t list_select_ns = 0;
     uint64_t geo_job_build_ns = 0;
+    uint64_t geo_mask_compute_ns = 0;
+    uint64_t geo_desc_map_ns = 0;
+    uint64_t geo_job_enqueue_ns = 0;
     uint64_t group_work_ns = 0;
     uint64_t desc_issue_ns = 0;
     uint64_t readback_accum_ns = 0;
@@ -52,13 +55,17 @@ struct MatchPhaseTotals
     {
         std::printf(
             "[phase-profile] queries=%zu work_items=%zu total_ns=%llu "
-            "list_select_ns=%llu geo_job_build_ns=%llu group_work_ns=%llu "
+            "list_select_ns=%llu geo_job_build_ns=%llu geo_mask_compute_ns=%llu "
+            "geo_desc_map_ns=%llu geo_job_enqueue_ns=%llu group_work_ns=%llu "
             "desc_issue_ns=%llu readback_accum_ns=%llu candidate_scan_ns=%llu\n",
             query_count,
             work_items,
             static_cast<unsigned long long>(total_ns),
             static_cast<unsigned long long>(list_select_ns),
             static_cast<unsigned long long>(geo_job_build_ns),
+            static_cast<unsigned long long>(geo_mask_compute_ns),
+            static_cast<unsigned long long>(geo_desc_map_ns),
+            static_cast<unsigned long long>(geo_job_enqueue_ns),
             static_cast<unsigned long long>(group_work_ns),
             static_cast<unsigned long long>(desc_issue_ns),
             static_cast<unsigned long long>(readback_accum_ns),
@@ -82,6 +89,9 @@ struct MatchPhaseTotals
     uint64_t total_ns = 0;
     uint64_t list_select_ns = 0;
     uint64_t geo_job_build_ns = 0;
+    uint64_t geo_mask_compute_ns = 0;
+    uint64_t geo_desc_map_ns = 0;
+    uint64_t geo_job_enqueue_ns = 0;
     uint64_t group_work_ns = 0;
     uint64_t desc_issue_ns = 0;
     uint64_t readback_accum_ns = 0;
@@ -157,6 +167,26 @@ count_mismatch_rows_for_lane(const uint8_t* row_block,
     return mismatch;
 }
 
+static inline bool
+mask_or_and_accumulate(msim::IvfMatcher::MaskRow& out,
+                       const msim::IvfMatcher::MaskRow& a,
+                       const msim::IvfMatcher::MaskRow& b)
+{
+    bool any_hit = false;
+    size_t i = 0;
+    for (; i + sizeof(uint64_t) <= out.size(); i += sizeof(uint64_t)) {
+        const uint64_t combined = load_u64(a.data() + i) & load_u64(b.data() + i);
+        store_u64(out.data() + i, load_u64(out.data() + i) | combined);
+        any_hit = any_hit || (combined != 0u);
+    }
+    for (; i < out.size(); ++i) {
+        const uint8_t combined = static_cast<uint8_t>(a[i] & b[i]);
+        out[i] = static_cast<uint8_t>(out[i] | combined);
+        any_hit = any_hit || (combined != 0u);
+    }
+    return any_hit;
+}
+
 static inline GeoValueArray
 build_geo_probe_values(uint8_t center, uint8_t geo_max)
 {
@@ -190,9 +220,10 @@ geo_rows_for_nibble(uint16_t row_base, bool is_x, bool high, uint8_t nibble)
 // The helper writes the rows contiguously, then pulls them back in one block copy.
 static inline void geo_batch_eq_masks_axis_block(
     CimModule& cim,
-    const msim::IvfPlacement& place,
-    uint32_t bucket_id,
-    uint32_t group_in_bucket,
+    uint16_t bank,
+    uint16_t mat,
+    uint16_t array,
+    uint16_t row_base,
     bool is_x,
     const uint8_t *vals,
     size_t num_vals,
@@ -208,9 +239,6 @@ static inline void geo_batch_eq_masks_axis_block(
     if (temp_base_row + need_rows > 64) {
         throw std::runtime_error("geo_batch_eq_masks_axis_block: temp rows exceed [0,63] region");
     }
-
-    uint16_t bank = 0, mat = 0, array = 0, row_base = 0;
-    map_geo_bucket_group_to_region(place, bucket_id, group_in_bucket, bank, mat, array, row_base);
 
     // A. For each candidate value, issue two ORs and write them to temp rows
     //    temp_base + 2*i and temp_base + 2*i + 1.
@@ -469,56 +497,45 @@ IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(uint32_t bucket_id, uint32_t gr
     return mis_lo;
 }
 
-void IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
+bool IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
                                  uint8_t qgx, uint8_t qgy,
                                  const std::array<uint8_t, kGeoSweepWidth>& gx_vals,
                                  const std::array<uint8_t, kGeoSweepWidth>& gy_vals,
                                  MaskRow& out_mask_xy)
 {
+    static_cast<void>(qgx);
+    static_cast<void>(qgy);
+    static constexpr size_t kGeoProbeCenter = kGeoSweepWidth / 2u;
     out_mask_xy.fill(0);
 
     // Use temp rows [0,63] for geo, and keep descriptor temp rows above that.
     static constexpr uint16_t kGeoTempBase = 0;
-    GeoMaskArray eq_masks{};
+    GeoMaskArray eq_x_masks{};
+    GeoMaskArray eq_y_masks{};
     GeoTempBlock block{};
+    uint16_t bank = 0, mat = 0, array = 0, row_base = 0;
+    map_geo_bucket_group_to_region(place_, bucket_id, group_in_bucket, bank, mat, array, row_base);
 
-    MaskRow my_fixed{};
-    {
-        geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
-                                      /*is_x=*/false, &qgy, 1,
-                                      eq_masks.data(), kGeoTempBase, block);
-        my_fixed = eq_masks[0];
-    }
-
-    MaskRow mx_fixed{};
-    {
-        geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
-                                      /*is_x=*/true, &qgx, 1,
-                                      eq_masks.data(), kGeoTempBase, block);
-        mx_fixed = eq_masks[0];
-    }
-
-    // 2. Sweep x around the query location while y stays fixed.
-    geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
+    geo_batch_eq_masks_axis_block(cim_, bank, mat, array, row_base,
                                   /*is_x=*/true, gx_vals.data(), gx_vals.size(),
-                                  eq_masks.data(), kGeoTempBase, block);
-
-    for (size_t i = 0; i < gx_vals.size(); ++i) {
-        MaskRow tmp = eq_masks[i];
-        mask_and_inplace(tmp, my_fixed);
-        mask_or_inplace(out_mask_xy, tmp);
-    }
-
-    // 3. Sweep y around the query location while x stays fixed.
-    geo_batch_eq_masks_axis_block(cim_, place_, bucket_id, group_in_bucket,
+                                  eq_x_masks.data(), kGeoTempBase, block);
+    geo_batch_eq_masks_axis_block(cim_, bank, mat, array, row_base,
                                   /*is_x=*/false, gy_vals.data(), gy_vals.size(),
-                                  eq_masks.data(), kGeoTempBase, block);
+                                  eq_y_masks.data(), kGeoTempBase, block);
+
+    const MaskRow& mx_fixed = eq_x_masks[kGeoProbeCenter];
+    const MaskRow& my_fixed = eq_y_masks[kGeoProbeCenter];
+
+    bool any_hit = false;
+    for (size_t i = 0; i < gx_vals.size(); ++i) {
+        any_hit = mask_or_and_accumulate(out_mask_xy, eq_x_masks[i], my_fixed) || any_hit;
+    }
 
     for (size_t i = 0; i < gy_vals.size(); ++i) {
-        MaskRow tmp = eq_masks[i];
-        mask_and_inplace(tmp, mx_fixed);
-        mask_or_inplace(out_mask_xy, tmp);
+        any_hit = mask_or_and_accumulate(out_mask_xy, eq_y_masks[i], mx_fixed) || any_hit;
     }
+
+    return any_hit;
 }
 
 void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_bucket,
@@ -617,25 +634,30 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     const uint32_t total_geo_groups = geo_group_base.back();
     std::vector<MaskRow> geo_masks(total_geo_groups);
     std::vector<uint8_t> geo_ready(total_geo_groups, 0u);
+    std::vector<uint8_t> geo_has_hits(total_geo_groups, 0u);
 
     auto geo_index = [&](uint32_t lid, uint32_t group_in_bucket) -> uint32_t {
         return geo_group_base[static_cast<size_t>(lid)] + group_in_bucket;
     };
 
-    auto get_geo_mask = [&](uint32_t lid, uint32_t group_in_bucket) -> const MaskRow& {
+    auto ensure_geo_mask = [&](uint32_t lid, uint32_t group_in_bucket) -> bool {
         const uint32_t idx = geo_index(lid, group_in_bucket);
         if (geo_ready[idx] == 0u) {
-            geo_eq_masks_xy(
-                lid,
-                group_in_bucket,
-                qgx,
-                qgy,
-                gx_probe_vals,
-                gy_probe_vals,
-                geo_masks[idx]);
+            geo_has_hits[idx] = 0u;
+            {
+                ScopedPhaseTimer timer(phase_totals.geo_mask_compute_ns);
+                geo_has_hits[idx] = geo_eq_masks_xy(
+                    lid,
+                    group_in_bucket,
+                    qgx,
+                    qgy,
+                    gx_probe_vals,
+                    gy_probe_vals,
+                    geo_masks[idx]) ? 1u : 0u;
+            }
             geo_ready[idx] = 1u;
         }
-        return geo_masks[idx];
+        return geo_has_hits[idx] != 0u;
     };
 
     // Per-query work queues. Descriptor mismatches are counted directly from the
@@ -675,15 +697,20 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
 
                 for (uint32_t g = 0; g < groups; ++g) {
                     const uint32_t geo_idx = geo_index(lid, g);
-                    const MaskRow& geo_xy = get_geo_mask(lid, g);
-                    if (!mask_any(geo_xy)) continue;
+                    if (!ensure_geo_mask(lid, g)) continue;
 
                     uint16_t bank=0, mat=0, array=0;
-                    map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);
+                    {
+                        ScopedPhaseTimer timer(phase_totals.geo_desc_map_ns);
+                        map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);
+                    }
 
-                    jobs.push_back(DescJob{
-                        static_cast<uint32_t>(qi), lid, g, bank, mat, array, geo_idx
-                    });
+                    {
+                        ScopedPhaseTimer timer(phase_totals.geo_job_enqueue_ns);
+                        jobs.push_back(DescJob{
+                            static_cast<uint32_t>(qi), lid, g, bank, mat, array, geo_idx
+                        });
+                    }
                 }
             }
         }

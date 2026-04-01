@@ -20,6 +20,14 @@
   static inline void m5_work_end   (uint64_t, uint64_t) {}
 #endif
 
+static bool should_print_progress(uint64_t current, uint64_t total) {
+    if (total == 0) return false;
+    if (total <= 10) return true;
+
+    const uint64_t interval = (total + 9) / 10;
+    return current == total || (current % interval) == 0;
+}
+
 struct MapData {
     uint32_t N = 0;
     float polevar = 0.f;
@@ -111,6 +119,16 @@ struct FramesReader {
     }
 };
 
+static uint64_t count_total_frames(const std::string& path) {
+    FramesReader reader(path);
+    Frame frame;
+    uint64_t total = 0;
+    while (reader.read_one(frame)) {
+        ++total;
+    }
+    return total;
+}
+
 struct PointCloud2f {
     const std::vector<float>* xy = nullptr; // [x0,y0,...]
     size_t kdtree_get_point_count() const { return xy->size() / 2; }
@@ -200,6 +218,7 @@ int main(int argc, char** argv) {
     KDTree kdtree(2, pc, nanoflann::KDTreeSingleIndexAdaptorParams(16));
     kdtree.buildIndex();
 
+    const uint64_t total_frames = count_total_frames(argv[2]);
     FramesReader rdr(argv[2]);
     Frame fr;
 
@@ -217,7 +236,10 @@ int main(int argc, char** argv) {
         m5_dump_stats(0, 0);
 
         cnt++;
-        if (cnt % 50 == 0) std::cerr << "processed frames: " << cnt << "\n";
+        if (should_print_progress(cnt, total_frames)) {
+            std::cerr << "processed frames: "
+                      << cnt << "/" << total_frames << "\n";
+        }
     }
 
     std::cerr << "done. frames=" << cnt << " checksum=" << total_checksum << "\n";

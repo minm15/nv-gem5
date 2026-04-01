@@ -22,6 +22,15 @@
 
 namespace {
 
+static bool should_print_progress(uint64_t current, uint64_t total)
+{
+    if (total == 0) return false;
+    if (total <= 10) return true;
+
+    const uint64_t interval = (total + 9) / 10;
+    return current == total || (current % interval) == 0;
+}
+
 #if defined(inCIM)
 static inline void
 begin_roi(uint64_t step_idx)
@@ -584,6 +593,7 @@ int main()
         uint64_t cim_checksum = 0u;
         uint64_t cpu_checksum = 0u;
 
+        const uint64_t total_steps = query_loader.steps();
         for (size_t step_idx = 0; step_idx < query_loader.steps(); ++step_idx) {
             const msim::QueryStepView step = query_loader.step(step_idx);
 
@@ -623,10 +633,12 @@ int main()
             cim_checksum += checksum_results(cim_results);
             cpu_checksum += checksum_results(cpu_results);
 
-            std::cout << "[step] s=" << step_idx
-                      << " m=" << step.m
-                      << " checksum=" << checksum_results(cim_results)
-                      << "\n";
+            const uint64_t completed_steps =
+                static_cast<uint64_t>(step_idx) + 1;
+            if (should_print_progress(completed_steps, total_steps)) {
+                std::cerr << "processed steps: "
+                          << completed_steps << "/" << total_steps << "\n";
+            }
         }
 
         std::cout << "[pass] total_queries=" << total_queries

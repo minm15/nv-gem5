@@ -12,7 +12,7 @@ OUT := bin/pf_kernel_roi
 SRCS := main.cpp
 # SRCS := data_wo_cim.cpp
 
-CXXFLAGS := -DNDEBUG -std=gnu++17 -DUSE_M5 \
+CXXFLAGS := -O1 -DNDEBUG -std=gnu++17 -DUSE_M5 \
             -I. -I$(M5_INC_CONT)
 LDFLAGS  := -static
 LDLIBS   := $(M5_LIB_CONT)

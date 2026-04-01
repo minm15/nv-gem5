@@ -51,7 +51,7 @@ private:
     std::vector<uint32_t> select_lists_cpu(const uint8_t* qdesc64, uint32_t nprobe) const;
 
     // geo / desc compute on a single list
-    void geo_eq_masks_xy(
+    bool geo_eq_masks_xy(
         uint32_t bucket_id,
         uint32_t group_in_bucket,
         uint8_t qgx,

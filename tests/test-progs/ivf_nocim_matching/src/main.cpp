@@ -18,6 +18,14 @@
   static inline void m5_work_end   (uint64_t, uint64_t) {}
 #endif
 
+static bool should_print_progress(uint64_t current, uint64_t total) {
+    if (total == 0) return false;
+    if (total <= 10) return true;
+
+    const uint64_t interval = (total + 9) / 10;
+    return current == total || (current % interval) == 0;
+}
+
 // ------------------------
 // basic file utils
 // ------------------------
@@ -515,7 +523,11 @@ int main(int argc, char** argv) {
         m5_work_end(1, (uint64_t)s);
         m5_dump_stats(0, 0);
 
-        if ((s % 200) == 0) std::cerr << "processed steps: " << s << "/" << qp.S << "\n";
+        const uint64_t completed_steps = static_cast<uint64_t>(s) + 1;
+        if (should_print_progress(completed_steps, qp.S)) {
+            std::cerr << "processed steps: "
+                      << completed_steps << "/" << qp.S << "\n";
+        }
     }
 
     std::cerr << "done. steps=" << qp.S << " checksum=" << total_cs << "\n";

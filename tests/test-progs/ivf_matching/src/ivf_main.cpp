@@ -16,6 +16,15 @@
 
 #include "msim_config.hpp"
 
+static bool should_print_progress(uint64_t current, uint64_t total)
+{
+    if (total == 0) return false;
+    if (total <= 10) return true;
+
+    const uint64_t interval = (total + 9) / 10;
+    return current == total || (current % interval) == 0;
+}
+
 static std::vector<uint32_t> build_order_centroid_nn(const msim::IvfMapBins& map, uint32_t start = 0)
 {
     const uint32_t K   = map.model.nlist;
@@ -150,6 +159,7 @@ int main()
         uint64_t total_queries = 0;
         volatile uint64_t checksum = 0; // prevent over-optimization
 
+        const uint64_t total_steps = query_loader.steps();
         for (size_t s = 0; s < query_loader.steps(); ++s) {
             const msim::QueryStepView st = query_loader.step(s);
 
@@ -179,7 +189,11 @@ int main()
             m5_work_end(1, static_cast<uint64_t>(s));
             m5_dump_stats(0, 0);
 
-            std::cout << "[step] s=" << s << " m=" << st.m << "\n";
+            const uint64_t completed_steps = static_cast<uint64_t>(s) + 1;
+            if (should_print_progress(completed_steps, total_steps)) {
+                std::cerr << "processed steps: "
+                          << completed_steps << "/" << total_steps << "\n";
+            }
         }
 
         std::cout << "[done] total_queries=" << total_queries
