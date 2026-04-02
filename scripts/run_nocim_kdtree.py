@@ -8,6 +8,7 @@ if GEM5_ROOT not in sys.path:
 
 import m5
 from m5.objects import *
+from configs.common import SimpleOpts
 
 # --- System ---
 system = System()
@@ -114,9 +115,14 @@ system.cpu.createInterruptController()
 binary = "./tests/test-progs/simulation_kdtree/bin/pf_kernel_roi"
 map_path = "./tests/test-progs/simulation_kdtree/pf_export/map.bin"
 frames_path = "./tests/test-progs/simulation_kdtree/pf_export/frames.bin"  
+SimpleOpts.add_option("--max-steps", type=int, default=None)
+args = SimpleOpts.parse_args()
 
 process = Process()
-process.cmd = [binary, map_path, frames_path]
+cmd = [binary, map_path, frames_path]
+if args.max_steps is not None:
+    cmd.extend(["--max-steps", str(args.max_steps)])
+process.cmd = cmd
 system.cpu.workload = process
 system.cpu.createThreads()
 system.workload = SEWorkload.init_compatible(binary)

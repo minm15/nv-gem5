@@ -445,10 +445,10 @@ static QueryPack load_query_dir(const std::string& qdir) {
 static void usage() {
     std::cerr
       << "usage:\n"
-      << "  ./pf_kernel_ivf_dir_roi <map_dir> <query_dir> [--nprobe N] [--topk K]\n"
+      << "  ./pf_kernel_ivf_dir_roi <map_dir> <query_dir> [--max-steps N] [--nprobe N] [--topk K]\n"
       << "                           [--alpha A] [--beta B] [--use_idf 0|1]\n"
       << "example:\n"
-      << "  ./pf_kernel_ivf_dir_roi export_gem5/2013-01-10/map export_gem5/2013-01-10/query --nprobe 32 --topk 3\n";
+      << "  ./pf_kernel_ivf_dir_roi export_gem5/2013-01-10/map export_gem5/2013-01-10/query --max-steps 100 --nprobe 32 --topk 3\n";
 }
 
 int main(int argc, char** argv) {
@@ -461,10 +461,13 @@ int main(int argc, char** argv) {
     bool override_use_idf = false; uint32_t use_idf_val = 1;
     bool override_alpha = false; float alpha_val = 1.0f;
     bool override_beta  = false; float beta_val  = 5.0f;
+    uint64_t requested_steps = 0;
+    bool has_requested_steps = false;
 
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
-        if (a == "--nprobe" && i + 1 < argc) override_nprobe = (uint32_t)std::stoul(argv[++i]);
+        if (a == "--max-steps" && i + 1 < argc) { requested_steps = std::stoull(argv[++i]); has_requested_steps = true; }
+        else if (a == "--nprobe" && i + 1 < argc) override_nprobe = (uint32_t)std::stoul(argv[++i]);
         else if (a == "--topk" && i + 1 < argc) override_topk = (uint32_t)std::stoul(argv[++i]);
         else if (a == "--use_idf" && i + 1 < argc) { override_use_idf = true; use_idf_val = (uint32_t)std::stoul(argv[++i]); }
         else if (a == "--alpha" && i + 1 < argc)   { override_alpha = true; alpha_val = std::stof(argv[++i]); }
@@ -488,12 +491,18 @@ int main(int argc, char** argv) {
               << " alpha=" << idx.alpha << " beta=" << idx.beta
               << " use_idf=" << ((idx.flags & 1u) ? 1 : 0)
               << " nprobe=" << idx.nprobe << " top_k=" << idx.top_k << "\n";
-    std::cerr << "[query] steps(S)=" << qp.S << " totalQ=" << qp.step_offsets.back() << "\n";
+    const uint64_t available_steps = qp.S;
+    const uint64_t run_steps = has_requested_steps ?
+        std::min<uint64_t>(requested_steps, available_steps) :
+        available_steps;
+    std::cerr << "[query] steps(S)=" << available_steps
+              << " totalQ=" << qp.step_offsets.back()
+              << " run_steps=" << run_steps << "\n";
 
     uint64_t total_cs = 0;
     const uint64_t totalQ = qp.step_offsets.back();
 
-    for (uint32_t s = 0; s < qp.S; s++) {
+    for (uint64_t s = 0; s < run_steps; s++) {
         uint8_t qrx = qp.pose_grid[(size_t)s * 2 + 0];
         uint8_t qry = qp.pose_grid[(size_t)s * 2 + 1];
         uint32_t Q  = qp.step_counts[s];
@@ -523,13 +532,13 @@ int main(int argc, char** argv) {
         m5_work_end(1, (uint64_t)s);
         m5_dump_stats(0, 0);
 
-        const uint64_t completed_steps = static_cast<uint64_t>(s) + 1;
-        if (should_print_progress(completed_steps, qp.S)) {
+        const uint64_t completed_steps = s + 1;
+        if (should_print_progress(completed_steps, run_steps)) {
             std::cerr << "processed steps: "
-                      << completed_steps << "/" << qp.S << "\n";
+                      << completed_steps << "/" << run_steps << "\n";
         }
     }
 
-    std::cerr << "done. steps=" << qp.S << " checksum=" << total_cs << "\n";
+    std::cerr << "done. steps=" << run_steps << " checksum=" << total_cs << "\n";
     return 0;
 }

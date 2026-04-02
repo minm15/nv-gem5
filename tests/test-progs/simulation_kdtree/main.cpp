@@ -28,6 +28,11 @@ static bool should_print_progress(uint64_t current, uint64_t total) {
     return current == total || (current % interval) == 0;
 }
 
+static void usage(const char* prog) {
+    std::cerr << "usage: " << prog
+              << " <map.bin> <frames.bin> [--max-steps N]\n";
+}
+
 struct MapData {
     uint32_t N = 0;
     float polevar = 0.f;
@@ -205,8 +210,21 @@ uint64_t measurement_update(
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "usage: ./pf_kernel_roi <map.bin> <frames.bin>\n";
+        usage(argv[0]);
         return 1;
+    }
+
+    uint64_t requested_steps = 0;
+    bool has_requested_steps = false;
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--max-steps" && i + 1 < argc) {
+            requested_steps = std::stoull(argv[++i]);
+            has_requested_steps = true;
+        } else {
+            usage(argv[0]);
+            return 1;
+        }
     }
 
     MapData map = load_map(argv[1]);
@@ -218,14 +236,19 @@ int main(int argc, char** argv) {
     KDTree kdtree(2, pc, nanoflann::KDTreeSingleIndexAdaptorParams(16));
     kdtree.buildIndex();
 
-    const uint64_t total_frames = count_total_frames(argv[2]);
+    const uint64_t available_frames = count_total_frames(argv[2]);
+    const uint64_t total_frames = has_requested_steps ?
+        std::min<uint64_t>(requested_steps, available_frames) :
+        available_frames;
+    std::cerr << "[info] frames=" << available_frames
+              << " run_frames=" << total_frames << "\n";
     FramesReader rdr(argv[2]);
     Frame fr;
 
     uint64_t total_checksum = 0;
     size_t cnt = 0;
 
-    while (rdr.read_one(fr)) {
+    while (cnt < total_frames && rdr.read_one(fr)) {
         // ROI: per-frame kernel only
         m5_reset_stats(0, 0);
         m5_work_begin(1, static_cast<uint64_t>(fr.frame_id));

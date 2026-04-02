@@ -172,13 +172,20 @@ system.cpu.createInterruptController()
 # --- Binary ---
 binary = "./tests/test-progs/ivf_matching/bin/ivf_sim"
 SimpleOpts.add_option("binary", nargs="?", default=binary)
+SimpleOpts.add_option("--max-steps", type=int, default=None)
 
 EndAddress = 0x21000000
 SimpleOpts.add_option("--EndAddress", type=str, default="0x21000000")
+args = SimpleOpts.parse_args()
 
 process = Process()
-process.cmd = [binary]
-system.workload = SEWorkload.init_compatible(binary)
+cmd = [args.binary]
+if args.max_steps is not None:
+    cmd.extend(["--max-steps", str(args.max_steps)])
+print(cmd)
+process.cmd = cmd
+print(process.cmd)
+system.workload = SEWorkload.init_compatible(args.binary)
 system.cpu.workload = process
 system.cpu.createThreads()
 

@@ -8,6 +8,7 @@ if GEM5_ROOT not in sys.path:
 
 import m5
 from m5.objects import *
+from configs.common import SimpleOpts
 
 # --- System ---
 system = System()
@@ -114,9 +115,14 @@ system.cpu.createInterruptController()
 ivf_bin = "./tests/test-progs/ivf_nocim_matching/bin/pf_kernel_roi"
 ivf_map_path = "./tests/test-progs/export_gem5/2013-01-10/map"
 ivf_query_path = "./tests/test-progs/export_gem5/2013-01-10/query"
+SimpleOpts.add_option("--max-steps", type=int, default=None)
+args = SimpleOpts.parse_args()
 
 process = Process()
-process.cmd = [ivf_bin, ivf_map_path, ivf_query_path]
+cmd = [ivf_bin, ivf_map_path, ivf_query_path]
+if args.max_steps is not None:
+    cmd.extend(["--max-steps", str(args.max_steps)])
+process.cmd = cmd
 system.cpu.workload = process
 system.cpu.createThreads()
 system.workload = SEWorkload.init_compatible(ivf_bin)

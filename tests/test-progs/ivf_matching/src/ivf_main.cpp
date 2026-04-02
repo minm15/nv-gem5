@@ -3,6 +3,7 @@
 #include <string>
 #include <stdexcept>
 #include <cstdint>
+#include <algorithm>
 
 #include "gem5/m5ops.h"
 
@@ -23,6 +24,11 @@ static bool should_print_progress(uint64_t current, uint64_t total)
 
     const uint64_t interval = (total + 9) / 10;
     return current == total || (current % interval) == 0;
+}
+
+static void usage(const char* prog)
+{
+    std::cerr << "usage: " << prog << " [--max-steps N]\n";
 }
 
 static std::vector<uint32_t> build_order_centroid_nn(const msim::IvfMapBins& map, uint32_t start = 0)
@@ -75,8 +81,22 @@ static std::vector<uint32_t> build_order_centroid_nn(const msim::IvfMapBins& map
     return order;
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    uint64_t requested_steps = 0;
+    bool has_requested_steps = false;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--max-steps" && i + 1 < argc) {
+            requested_steps = std::stoull(argv[++i]);
+            has_requested_steps = true;
+        } else {
+            usage(argv[0]);
+            return 1;
+        }
+    }
+
     // ---- hardcoded by msim_config ----
     const std::string map_dir   = msim::kMapDir;
     const std::string query_dir = msim::kQueryDir;
@@ -102,8 +122,14 @@ int main()
                   << " nlist=" << (map_loader.ivf().enabled ? map_loader.ivf().nlist : 0)
                   << "\n";
 
-        std::cout << "[info] query steps=" << query_loader.steps()
+        const uint64_t available_steps = query_loader.steps();
+        const uint64_t run_steps = has_requested_steps ?
+            std::min<uint64_t>(requested_steps, available_steps) :
+            available_steps;
+
+        std::cout << "[info] query steps=" << available_steps
                   << " total_rows=" << query_loader.total_query_desc_rows()
+                  << " run_steps=" << run_steps
                   << "\n";
 
         std::cout << "[info] nprobe=" << kNProbe
@@ -159,8 +185,7 @@ int main()
         uint64_t total_queries = 0;
         volatile uint64_t checksum = 0; // prevent over-optimization
 
-        const uint64_t total_steps = query_loader.steps();
-        for (size_t s = 0; s < query_loader.steps(); ++s) {
+        for (uint64_t s = 0; s < run_steps; ++s) {
             const msim::QueryStepView st = query_loader.step(s);
 
             // ROI for this step: all query desc in this step
@@ -189,14 +214,15 @@ int main()
             m5_work_end(1, static_cast<uint64_t>(s));
             m5_dump_stats(0, 0);
 
-            const uint64_t completed_steps = static_cast<uint64_t>(s) + 1;
-            if (should_print_progress(completed_steps, total_steps)) {
+            const uint64_t completed_steps = s + 1;
+            if (should_print_progress(completed_steps, run_steps)) {
                 std::cerr << "processed steps: "
-                          << completed_steps << "/" << total_steps << "\n";
+                          << completed_steps << "/" << run_steps << "\n";
             }
         }
 
-        std::cout << "[done] total_queries=" << total_queries
+        std::cout << "[done] run_steps=" << run_steps
+                  << " total_queries=" << total_queries
                   << " checksum=" << checksum << "\n";
         return 0;
     } catch (const std::exception& e) {
