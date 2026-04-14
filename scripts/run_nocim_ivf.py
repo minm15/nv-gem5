@@ -36,35 +36,35 @@ system.membus.snoop_response_latency = 1
 system.cpu.icache = Cache(
     size='64kB',   # Orin A78AE
     assoc=2,
-    tag_latency=10,
-    data_latency=10,
-    response_latency=10,
+    tag_latency=5,
+    data_latency=5,
+    response_latency=5,
 )
 
 system.cpu.dcache = Cache(
     size='64kB',   # Orin A78AE
     assoc=2,
-    tag_latency=10,
-    data_latency=10,
-    response_latency=10,
+    tag_latency=5,
+    data_latency=5,
+    response_latency=5,
 )
 
 # --- L2 Cache (per-core) ---
 system.l2_cache = Cache(
     size='256kB',  # single core L2
     assoc=4,      
-    tag_latency=20,
-    data_latency=20,
-    response_latency=20,
+    tag_latency=15,
+    data_latency=15,
+    response_latency=15,
 )
 
 # --- L3 Cache (per-cluster) ---
 system.l3_cache = Cache(
     size='2MB',    # single cluster slice
     assoc=8,
-    tag_latency=30,
-    data_latency=30,
-    response_latency=30,
+    tag_latency=50,
+    data_latency=50,
+    response_latency=50,
 )
 
 
