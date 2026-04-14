@@ -181,6 +181,19 @@ class CimModule
         uint32_t mat_mask = 0xffffffffu,
         uint32_t array_mask = 0xffffffffu);
 
+    // Issue a sequence of OR commands that share the same masks and target
+    // consecutive temp rows. This avoids repeating mask normalization and
+    // command setup for each individual row quad.
+    void ORToConsecutiveTemps(
+        const std::array<uint16_t, 4> *rows_list,
+        size_t num_ops,
+        uint8_t byte_mask = 0xffu,
+        uint64_t bank_mask = kAllOnes64,
+        uint64_t column_mask = kAllOnes64,
+        uint16_t dest_base = 0x0000u,
+        uint32_t mat_mask = 0xffffffffu,
+        uint32_t array_mask = 0xffffffffu);
+
     void XOR(
         const std::vector<uint16_t> &rows,
         uint8_t byte_mask = 0xffu,

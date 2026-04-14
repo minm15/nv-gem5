@@ -533,17 +533,6 @@ class BaseCache : public ClockedObject
     virtual void recvTimingReq(PacketPtr pkt);
 
     /**
-     * Returns true when any memory in the attached system owns a CimHandler.
-     */
-    bool hasAnyCimHandler() const;
-
-    /**
-     * Apply the configured access request latency to an accepted upstream
-     * timing request.
-     */
-    void applyAccessRequestLatency(PacketPtr pkt) const;
-
-    /**
      * Handling the special case of uncacheable write responses to
      * make recvTimingResp less cluttered.
      */
@@ -922,12 +911,6 @@ class BaseCache : public ClockedObject
      * latency.
      */
     const Cycles responseLatency;
-
-    /**
-     * Extra request-side latency applied to CPU-originated timing accesses
-     * when the current system does not instantiate any CimHandler.
-     */
-    Cycles accessRequestLatency;
 
     /**
      * Whether tags and data are accessed sequentially.

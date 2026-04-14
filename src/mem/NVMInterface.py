@@ -121,3 +121,34 @@ class NVM_2400_1x64(NVMInterface):
     tWTR = "1.666ns"
     tRTW = "1.666ns"
     tCS = "1.666ns"
+
+"""
+The cim latency is set to very smaller
+Because the latency has included in the cim_handler parameter
+"""
+class NVM_CIM_1x64(NVMInterface):
+    write_buffer_size = 512
+    read_buffer_size = 512
+
+    max_pending_writes = 512
+    max_pending_reads = 512
+
+    device_rowbuffer_size = "512B"
+    device_size = "1GiB"
+    device_bus_width = 64
+    devices_per_rank = 1
+    ranks_per_channel = 1
+    banks_per_rank = 16
+
+    burst_length = 64
+    two_cycle_rdwr = False
+
+    tCK = "1ps"
+    tREAD = "1ps"
+    tWRITE = "1ps"
+    tSEND = "1ps"
+    tBURST = "1ps"
+    tWTR = "1ps"
+    tRTW = "1ps"
+    tCS = "1ps"
+

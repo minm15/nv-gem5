@@ -38,7 +38,6 @@ static constexpr int kGeoRowsPerGroup = 32;
 static constexpr int kGeoGroupsPerArray = 512 / kGeoRowsPerGroup; // 16
 static constexpr uint8_t kGeoMaxDefault = 90;
 
-// Probing: 10 checks (x sweep 5 + y sweep 5), center duplicated (still counts as 10 ops).
-static constexpr int kGeoProbeRadius = 2;
+static constexpr int kGeoProbeRadius = 1;
 
 } // namespace msim

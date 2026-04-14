@@ -344,6 +344,41 @@ CimModule::OR(const std::array<uint16_t, 4> &rows,
 }
 
 void
+CimModule::ORToConsecutiveTemps(const std::array<uint16_t, 4> *rows_list,
+                                size_t num_ops,
+                                uint8_t byte_mask,
+                                uint64_t bank_mask,
+                                uint64_t column_mask,
+                                uint16_t dest_base,
+                                uint32_t mat_mask,
+                                uint32_t array_mask)
+{
+    checkGeometryReady();
+
+    assert(rows_list != nullptr);
+    assert(num_ops > 0);
+    assert(byte_mask != 0);
+
+    CommandEncode cmd(this->commandWriteAddress);
+    cmd.operation_type = 1;
+    cmd.byte_mask = byte_mask;
+    cmd.bank_mask16 = normalizeBankMask16(bank_mask);
+    cmd.mat_mask32 = normalizeMatMask32(mat_mask);
+    cmd.array_mask32 = normalizeArrayMask32(array_mask);
+    cmd.column_mask = normalizeColumnMask(column_mask);
+    cmd.operation_flag_mask = 0x0fu;
+
+    for (size_t i = 0; i < num_ops; ++i) {
+        cmd.dest = static_cast<uint16_t>(dest_base + i);
+        const auto &rows = rows_list[i];
+        for (size_t row_idx = 0; row_idx < rows.size(); ++row_idx) {
+            cmd.row_number[row_idx] = rows[row_idx];
+        }
+        cmd.issue();
+    }
+}
+
+void
 CimModule::XOR(const std::vector<uint16_t> &rows,
                uint8_t byte_mask,
                uint64_t bank_mask,

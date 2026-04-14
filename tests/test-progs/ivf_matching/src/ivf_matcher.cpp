@@ -7,6 +7,7 @@
 #include <deque>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 
 #if defined(inCIM) && defined(IVF_PHASE_PROFILE)
 #include <gem5/m5ops.h>
@@ -240,27 +241,28 @@ static inline void geo_batch_eq_masks_axis_block(
         throw std::runtime_error("geo_batch_eq_masks_axis_block: temp rows exceed [0,63] region");
     }
 
-    // A. For each candidate value, issue two ORs and write them to temp rows
-    //    temp_base + 2*i and temp_base + 2*i + 1.
+    // A. Build all OR row quads first, then issue them with one batched helper
+    //    so the shared masks are normalized only once.
+    std::array<RowQuad, 2 * IvfMatcher::kGeoSweepWidth> issue_rows{};
     for (size_t i = 0; i < num_vals; ++i) {
         const uint8_t v  = vals[i];
         const uint8_t lo = static_cast<uint8_t>(v & 0x0Fu);
         const uint8_t hi = static_cast<uint8_t>((v >> 4) & 0x0Fu);
 
-        auto issue_nibble = [&](bool high, uint8_t nib, uint16_t temp_row) {
-            const RowQuad rows = geo_rows_for_nibble(row_base, is_x, high, nib);
-            cim.OR(rows,
-                   0xffu,
-                   CimModule::Mask::bank(bank),
-                   CimModule::Mask::colsAll(),
-                   temp_row,
-                   CimModule::Mask::mat(mat),
-                   CimModule::Mask::array(array));
-        };
-
-        issue_nibble(false, lo, static_cast<uint16_t>(temp_base_row + 2u * i + 0u));
-        issue_nibble(true,  hi, static_cast<uint16_t>(temp_base_row + 2u * i + 1u));
+        issue_rows[static_cast<size_t>(2u * i + 0u)] =
+            geo_rows_for_nibble(row_base, is_x, false, lo);
+        issue_rows[static_cast<size_t>(2u * i + 1u)] =
+            geo_rows_for_nibble(row_base, is_x, true, hi);
     }
+
+    cim.ORToConsecutiveTemps(issue_rows.data(),
+                             static_cast<size_t>(need_rows),
+                             0xffu,
+                             CimModule::Mask::bank(bank),
+                             CimModule::Mask::colsAll(),
+                             temp_base_row,
+                             CimModule::Mask::mat(mat),
+                             CimModule::Mask::array(array));
 
     // B. Read back the full temp block in one transfer.
     cim.copy_temp_block_to_cpu(block.data(),
@@ -384,6 +386,48 @@ IvfMatcher::IvfMatcher(CimModule& cim, const IvfMapBins& map, const IvfPlacement
 {
     if (map_.postings.nlist == 0) throw std::runtime_error("IvfMatcher: map postings empty");
     if (place_.bucket.size() != map_.postings.nlist) throw std::runtime_error("IvfMatcher: placement K mismatch");
+
+    bucket_regions_.resize(place_.bucket.size());
+
+    size_t total_geo_groups = 0;
+    for (const auto& bucket : place_.bucket) {
+        total_geo_groups += bucket.geo_groups;
+    }
+    unique_geo_regions_.reserve(total_geo_groups);
+
+    std::unordered_map<uint64_t, uint32_t> geo_region_ids;
+    geo_region_ids.reserve(total_geo_groups);
+
+    for (uint32_t lid = 0; lid < place_.bucket.size(); ++lid) {
+        const auto& bucket = place_.bucket[lid];
+        auto& regions = bucket_regions_[lid];
+        regions.desc_regions.resize(bucket.desc_groups);
+        regions.geo_region_ids.resize(bucket.geo_groups);
+
+        for (uint32_t g = 0; g < bucket.desc_groups; ++g) {
+            auto& desc = regions.desc_regions[g];
+            map_desc_bucket_group_to_region(place_, lid, g, desc.bank, desc.mat, desc.array);
+        }
+
+        for (uint32_t g = 0; g < bucket.geo_groups; ++g) {
+            GeoRegion region{};
+            map_geo_bucket_group_to_region(
+                place_, lid, g, region.bank, region.mat, region.array, region.row_base);
+
+            const uint64_t packed_region =
+                static_cast<uint64_t>(region.bank) |
+                (static_cast<uint64_t>(region.mat) << 16) |
+                (static_cast<uint64_t>(region.array) << 32) |
+                (static_cast<uint64_t>(region.row_base) << 48);
+
+            auto [it, inserted] =
+                geo_region_ids.emplace(packed_region, unique_geo_regions_.size());
+            if (inserted) {
+                unique_geo_regions_.push_back(region);
+            }
+            regions.geo_region_ids[g] = it->second;
+        }
+    }
 }
 
 std::vector<uint32_t> IvfMatcher::select_lists_cpu(const uint8_t* qdesc64, uint32_t nprobe) const
@@ -464,27 +508,43 @@ std::vector<uint32_t> IvfMatcher::select_lists_cpu(const uint8_t* qdesc64, uint3
     return out;
 }
 
-IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(uint32_t bucket_id, uint32_t group_in_bucket, bool is_x, uint8_t v)
+const IvfMatcher::DescRegion&
+IvfMatcher::desc_region(uint32_t bucket_id, uint32_t group_in_bucket) const
 {
-    uint16_t bank = 0, mat = 0, array = 0, row_base = 0;
-    map_geo_bucket_group_to_region(place_, bucket_id, group_in_bucket, bank, mat, array, row_base);
+    return bucket_regions_.at(bucket_id).desc_regions.at(group_in_bucket);
+}
 
+const IvfMatcher::GeoRegion&
+IvfMatcher::geo_region(uint32_t bucket_id, uint32_t group_in_bucket) const
+{
+    return unique_geo_regions_.at(geo_region_id(bucket_id, group_in_bucket));
+}
+
+uint32_t
+IvfMatcher::geo_region_id(uint32_t bucket_id, uint32_t group_in_bucket) const
+{
+    return bucket_regions_.at(bucket_id).geo_region_ids.at(group_in_bucket);
+}
+
+IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(const GeoRegion& region, bool is_x, uint8_t v)
+{
     const uint8_t lo = static_cast<uint8_t>(v & 0x0Fu);
     const uint8_t hi = static_cast<uint8_t>((v >> 4) & 0x0Fu);
 
     auto or_nibble_mismatch = [&](bool high, uint8_t nib) -> MaskRow {
-        const RowQuad rows = geo_rows_for_nibble(row_base, is_x, high, nib);
+        const RowQuad rows = geo_rows_for_nibble(region.row_base, is_x, high, nib);
 
         cim_.OR(rows,
                 0xffu,
-                CimModule::Mask::bank(bank),
+                CimModule::Mask::bank(region.bank),
                 CimModule::Mask::colsAll(),
                 0,
-                CimModule::Mask::mat(mat),
-                CimModule::Mask::array(array));
+                CimModule::Mask::mat(region.mat),
+                CimModule::Mask::array(region.array));
 
         MaskRow tmp{};
-        cim_.copy_temp_to_cpu(tmp.data(), bank, mat, array, 0, kRowBytes);
+        cim_.copy_temp_to_cpu(
+            tmp.data(), region.bank, region.mat, region.array, 0, kRowBytes);
         return tmp;
     };
 
@@ -497,7 +557,7 @@ IvfMatcher::MaskRow IvfMatcher::geo_eq_mask_axis(uint32_t bucket_id, uint32_t gr
     return mis_lo;
 }
 
-bool IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
+bool IvfMatcher::geo_eq_masks_xy(const GeoRegion& region,
                                  uint8_t qgx, uint8_t qgy,
                                  const std::array<uint8_t, kGeoSweepWidth>& gx_vals,
                                  const std::array<uint8_t, kGeoSweepWidth>& gy_vals,
@@ -513,13 +573,11 @@ bool IvfMatcher::geo_eq_masks_xy(uint32_t bucket_id, uint32_t group_in_bucket,
     GeoMaskArray eq_x_masks{};
     GeoMaskArray eq_y_masks{};
     GeoTempBlock block{};
-    uint16_t bank = 0, mat = 0, array = 0, row_base = 0;
-    map_geo_bucket_group_to_region(place_, bucket_id, group_in_bucket, bank, mat, array, row_base);
 
-    geo_batch_eq_masks_axis_block(cim_, bank, mat, array, row_base,
+    geo_batch_eq_masks_axis_block(cim_, region.bank, region.mat, region.array, region.row_base,
                                   /*is_x=*/true, gx_vals.data(), gx_vals.size(),
                                   eq_x_masks.data(), kGeoTempBase, block);
-    geo_batch_eq_masks_axis_block(cim_, bank, mat, array, row_base,
+    geo_batch_eq_masks_axis_block(cim_, region.bank, region.mat, region.array, region.row_base,
                                   /*is_x=*/false, gy_vals.data(), gy_vals.size(),
                                   eq_y_masks.data(), kGeoTempBase, block);
 
@@ -546,8 +604,7 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
     // Keep descriptor temp rows away from geo temp rows.
     static constexpr uint16_t kDescTempBase = 64;
 
-    uint16_t bank = 0, mat = 0, array = 0;
-    map_desc_bucket_group_to_region(place_, bucket_id, group_in_bucket, bank, mat, array);
+    const DescRegion& region = desc_region(bucket_id, group_in_bucket);
 
     std::vector<uint8_t> active_dims;
     active_dims.reserve(kDescDims);
@@ -562,32 +619,34 @@ void IvfMatcher::desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_buck
 
     // A. Issue one OR per active descriptor dimension and pack the results
     //    into consecutive temp rows.
+    std::vector<RowQuad> issue_rows(active_dims.size());
     for (size_t packed_idx = 0; packed_idx < active_dims.size(); ++packed_idx) {
         const int d = static_cast<int>(active_dims[packed_idx]);
         const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
-        RowQuad rows{};
+        RowQuad &rows = issue_rows[packed_idx];
 
         for (int b = 0; b < kDescBits; ++b) {
             const int qbit = (qv >> b) & 1u;
             rows[static_cast<size_t>(b)] =
                 (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
         }
-
-        cim_.OR(rows,
-                0xffu,
-                CimModule::Mask::bank(bank),
-                CimModule::Mask::colsAll(),
-                static_cast<uint16_t>(kDescTempBase + packed_idx),
-                CimModule::Mask::mat(mat),
-                CimModule::Mask::array(array));
     }
+
+    cim_.ORToConsecutiveTemps(issue_rows.data(),
+                              issue_rows.size(),
+                              0xffu,
+                              CimModule::Mask::bank(region.bank),
+                              CimModule::Mask::colsAll(),
+                              kDescTempBase,
+                              CimModule::Mask::mat(region.mat),
+                              CimModule::Mask::array(region.array));
 
     // B. Read back only the temp rows that were written.
     std::vector<uint8_t> block;
     block.resize(active_dims.size() * static_cast<size_t>(kRowBytes));
 
     cim_.copy_temp_block_to_cpu(block.data(),
-                                bank, mat, array,
+                                region.bank, region.mat, region.array,
                                 kDescTempBase,
                                 active_dims.size());
 
@@ -624,31 +683,18 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
     const GeoValueArray gx_probe_vals = build_geo_probe_values(qgx, map_.geo_max);
     const GeoValueArray gy_probe_vals = build_geo_probe_values(qgy, map_.geo_max);
 
-    const uint32_t K = map_.postings.nlist;
-    std::vector<uint32_t> geo_group_base(static_cast<size_t>(K) + 1u, 0u);
-    for (uint32_t lid = 0; lid < K; ++lid) {
-        geo_group_base[static_cast<size_t>(lid) + 1u] =
-            geo_group_base[static_cast<size_t>(lid)] + place_.bucket.at(lid).desc_groups;
-    }
-
-    const uint32_t total_geo_groups = geo_group_base.back();
-    std::vector<MaskRow> geo_masks(total_geo_groups);
-    std::vector<uint8_t> geo_ready(total_geo_groups, 0u);
-    std::vector<uint8_t> geo_has_hits(total_geo_groups, 0u);
-
-    auto geo_index = [&](uint32_t lid, uint32_t group_in_bucket) -> uint32_t {
-        return geo_group_base[static_cast<size_t>(lid)] + group_in_bucket;
-    };
+    std::vector<MaskRow> geo_masks(unique_geo_regions_.size());
+    std::vector<uint8_t> geo_ready(unique_geo_regions_.size(), 0u);
+    std::vector<uint8_t> geo_has_hits(unique_geo_regions_.size(), 0u);
 
     auto ensure_geo_mask = [&](uint32_t lid, uint32_t group_in_bucket) -> bool {
-        const uint32_t idx = geo_index(lid, group_in_bucket);
+        const uint32_t idx = geo_region_id(lid, group_in_bucket);
         if (geo_ready[idx] == 0u) {
             geo_has_hits[idx] = 0u;
             {
                 ScopedPhaseTimer timer(phase_totals.geo_mask_compute_ns);
                 geo_has_hits[idx] = geo_eq_masks_xy(
-                    lid,
-                    group_in_bucket,
+                    geo_region(lid, group_in_bucket),
                     qgx,
                     qgy,
                     gx_probe_vals,
@@ -696,13 +742,16 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
                     : std::min<uint32_t>(groups_total, max_groups_per_list);
 
                 for (uint32_t g = 0; g < groups; ++g) {
-                    const uint32_t geo_idx = geo_index(lid, g);
+                    const uint32_t geo_idx = geo_region_id(lid, g);
                     if (!ensure_geo_mask(lid, g)) continue;
 
                     uint16_t bank=0, mat=0, array=0;
                     {
                         ScopedPhaseTimer timer(phase_totals.geo_desc_map_ns);
-                        map_desc_bucket_group_to_region(place_, lid, g, bank, mat, array);
+                        const DescRegion& region = desc_region(lid, g);
+                        bank = region.bank;
+                        mat = region.mat;
+                        array = region.array;
                     }
 
                     {
@@ -793,24 +842,28 @@ IvfMatcher::match_one_step(uint8_t qgx, uint8_t qgy,
             // A. Issue one OR per non-zero descriptor dimension.
             {
                 ScopedPhaseTimer timer(phase_totals.desc_issue_ns);
+                std::vector<RowQuad> issue_rows(active_dim_count);
                 for (size_t packed_idx = 0; packed_idx < active_dim_count; ++packed_idx) {
                     const int d = static_cast<int>(active_dims[packed_idx]);
                     const uint8_t qv = static_cast<uint8_t>(qdesc64[d] & 0x0Fu);
-                    RowQuad rows{};
+                    RowQuad &rows = issue_rows[packed_idx];
 
                     for (int b = 0; b < kDescBits; ++b) {
                         const int qbit = (qv >> b) & 1u;
                         rows[static_cast<size_t>(b)] =
                             (qbit != 0) ? desc_inv_row(d, b) : desc_true_row(d, b);
                     }
+                }
 
-                    cim_.OR(rows,
-                            0xffu,
-                            CimModule::Mask::bank(w.bank),
-                            CimModule::Mask::colsAll(),
-                            /*temp_row=*/static_cast<uint16_t>(kDescTempBase + packed_idx),
-                            CimModule::Mask::mat(w.mat),
-                            w.array_mask);
+                if (!issue_rows.empty()) {
+                    cim_.ORToConsecutiveTemps(issue_rows.data(),
+                                              issue_rows.size(),
+                                              0xffu,
+                                              CimModule::Mask::bank(w.bank),
+                                              CimModule::Mask::colsAll(),
+                                              kDescTempBase,
+                                              CimModule::Mask::mat(w.mat),
+                                              w.array_mask);
                 }
             }
 

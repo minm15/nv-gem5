@@ -47,21 +47,41 @@ public:
     std::vector<MatchResult> match_one_step(uint8_t qgx, uint8_t qgy, const uint8_t* desc_ptr, size_t m, uint32_t nprobe, uint32_t max_groups_per_list);
 
 private:
+    struct DescRegion {
+        uint16_t bank = 0;
+        uint16_t mat = 0;
+        uint16_t array = 0;
+    };
+
+    struct GeoRegion {
+        uint16_t bank = 0;
+        uint16_t mat = 0;
+        uint16_t array = 0;
+        uint16_t row_base = 0;
+    };
+
+    struct BucketRegions {
+        std::vector<DescRegion> desc_regions;
+        std::vector<uint32_t> geo_region_ids;
+    };
+
     // list selection (CPU)
     std::vector<uint32_t> select_lists_cpu(const uint8_t* qdesc64, uint32_t nprobe) const;
 
     // geo / desc compute on a single list
     bool geo_eq_masks_xy(
-        uint32_t bucket_id,
-        uint32_t group_in_bucket,
+        const GeoRegion& region,
         uint8_t qgx,
         uint8_t qgy,
         const std::array<uint8_t, kGeoSweepWidth>& gx_vals,
         const std::array<uint8_t, kGeoSweepWidth>& gy_vals,
         MaskRow& out_mask_xy);
-    MaskRow geo_eq_mask_axis(uint32_t bucket_id, uint32_t group_in_bucket, bool is_x, uint8_t v);
+    MaskRow geo_eq_mask_axis(const GeoRegion& region, bool is_x, uint8_t v);
 
     void desc_mismatch_planes(uint32_t bucket_id, uint32_t group_in_bucket, const uint8_t* qdesc64, Planes& out_planes);
+    const DescRegion& desc_region(uint32_t bucket_id, uint32_t group_in_bucket) const;
+    const GeoRegion& geo_region(uint32_t bucket_id, uint32_t group_in_bucket) const;
+    uint32_t geo_region_id(uint32_t bucket_id, uint32_t group_in_bucket) const;
 
     // helpers
     static void mask_and_inplace(MaskRow& a, const MaskRow& b);
@@ -73,6 +93,8 @@ private:
     CimModule& cim_;
     const IvfMapBins& map_;
     const IvfPlacement& place_;
+    std::vector<BucketRegions> bucket_regions_;
+    std::vector<GeoRegion> unique_geo_regions_;
 };
 
 } // namespace msim

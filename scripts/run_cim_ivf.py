@@ -29,72 +29,15 @@ system.cpu = DerivO3CPU()
 
 # Bus
 system.membus = SystemXBar()
-system.l2_xbar = L2XBar()
 system.membus.frontend_latency = 1
 system.membus.forward_latency = 1
 system.membus.response_latency = 1
 system.membus.snoop_response_latency = 1
 system.membus.width = 64 
-system.l2_xbar.width = 64
 
-# --- L1 Cache (single core) ---
-system.cpu.icache = Cache(
-    size='64kB',   # Orin A78AE
-    assoc=2,
-    tag_latency=5,
-    data_latency=5,
-    response_latency=5,
-    mshrs=4,
-    tgts_per_mshr=20
-)
-
-system.cpu.dcache = Cache(
-    size='64kB',   # Orin A78AE
-    assoc=2,
-    tag_latency=5,
-    data_latency=5,
-    response_latency=5,
-    mshrs=8,
-    tgts_per_mshr=20,
-    write_buffers=8
-)
-
-# --- L2 Cache (per-core) ---
-system.l2_cache = Cache(
-    size='256kB',  # single core L2
-    assoc=8,      
-    tag_latency=10,
-    data_latency=10,
-    response_latency=8,
-    mshrs=20,
-    tgts_per_mshr=12
-)
-
-# --- L3 Cache (per-cluster) ---
-system.l3_cache = Cache(
-    size='2MB',    # single cluster slice
-    assoc=16,
-    tag_latency=20,
-    data_latency=20,
-    response_latency=10,
-    mshrs=20,
-    tgts_per_mshr=12
-)
-
-# L1 -> L2XBar
-system.cpu.icache.cpu_side = system.cpu.icache_port
-system.cpu.dcache.cpu_side = system.cpu.dcache_port
-system.cpu.icache.mem_side = system.l2_xbar.cpu_side_ports
-system.cpu.dcache.mem_side = system.l2_xbar.cpu_side_ports
-
-# L2XBar -> L2
-system.l2_cache.cpu_side = system.l2_xbar.mem_side_ports
-
-# L2 -> L3 (Direct)
-system.l2_cache.mem_side = system.l3_cache.cpu_side
-
-# L3 -> MemBus
-system.l3_cache.mem_side = system.membus.cpu_side_ports
+# Connect CPU ports directly to the memory bus (no cache hierarchy).
+system.cpu.icache_port = system.membus.cpu_side_ports
+system.cpu.dcache_port = system.membus.cpu_side_ports
 
 system.system_port = system.membus.cpu_side_ports
 
@@ -107,26 +50,7 @@ system.mem_ctrl.static_backend_latency = "1ns"
 system.mem_ctrl.command_window = "1ns"
 system.mem_ctrl.port = system.membus.mem_side_ports
 
-system.mem_ctrl.dram = NVMInterface()
-system.mem_ctrl.dram.write_buffer_size = 2048
-system.mem_ctrl.dram.read_buffer_size = 2048
-system.mem_ctrl.dram.max_pending_writes = 64
-system.mem_ctrl.dram.max_pending_reads = 64
-system.mem_ctrl.dram.burst_length = 64
-system.mem_ctrl.dram.tCK = "1ps"
-system.mem_ctrl.dram.tREAD = "680ps"
-system.mem_ctrl.dram.tWRITE = "1ps"
-system.mem_ctrl.dram.tSEND = "1ps"
-system.mem_ctrl.dram.tBURST = "1ps"
-system.mem_ctrl.dram.tWTR = "1ps"
-system.mem_ctrl.dram.tRTW = "1ps"
-system.mem_ctrl.dram.tCS = "1ps"
-system.mem_ctrl.dram.device_rowbuffer_size = "512B"
-system.mem_ctrl.dram.device_size = "1GiB"
-system.mem_ctrl.dram.device_bus_width = 64
-system.mem_ctrl.dram.devices_per_rank = 16
-system.mem_ctrl.dram.ranks_per_channel = 16
-system.mem_ctrl.dram.banks_per_rank = 16
+system.mem_ctrl.dram = NVM_CIM_1x64()
 system.mem_ctrl.dram.range = system.mem_ranges[0]
 
 # CIM handler 

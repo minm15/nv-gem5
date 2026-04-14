@@ -89,9 +89,6 @@ class BaseCache(ClockedObject):
     tag_latency = Param.Cycles("Tag lookup latency")
     data_latency = Param.Cycles("Data access latency")
     response_latency = Param.Cycles("Latency for the return path on a miss")
-    access_request_latency = Param.Cycles(
-        50, "CPU-side request latency"
-    )
 
     warmup_percentage = Param.Percent(
         0, "Percentage of tags to be touched to warm up the cache"
@@ -101,10 +98,10 @@ class BaseCache(ClockedObject):
         0, "Number of misses to handle before calling exit"
     )
 
-    mshrs = Param.Unsigned("Number of MSHRs (max outstanding requests)")
+    mshrs = Param.Unsigned(1, "Number of MSHRs (max outstanding requests)")
     demand_mshr_reserve = Param.Unsigned(1, "MSHRs reserved for demand access")
-    tgts_per_mshr = Param.Unsigned("Max number of accesses per MSHR")
-    write_buffers = Param.Unsigned(8, "Number of write buffers")
+    tgts_per_mshr = Param.Unsigned(1, "Max number of accesses per MSHR")
+    write_buffers = Param.Unsigned(1, "Number of write buffers")
 
     is_read_only = Param.Bool(False, "Is this cache read only (e.g. inst)")
 
@@ -116,7 +113,6 @@ class BaseCache(ClockedObject):
     prefetch_on_pf_hit = Param.Bool(
         False, "Notify the hardware prefetcher on hit on prefetched lines"
     )
-
     tags = Param.BaseTags(BaseSetAssoc(), "Tag store")
     replacement_policy = Param.BaseReplacementPolicy(
         LRURP(), "Replacement policy"
@@ -136,7 +132,7 @@ class BaseCache(ClockedObject):
     )
 
     sequential_access = Param.Bool(
-        False, "Whether to access tags and data sequentially"
+        True, "Whether to access tags and data sequentially"
     )
 
     cpu_side = ResponsePort("Upstream port closer to the CPU and/or device")
@@ -215,7 +211,7 @@ class HybridBase(ClockedObject):
     mshrs = Param.Unsigned("Number of MSHRs (max outstanding requests)")
     demand_mshr_reserve = Param.Unsigned(1, "MSHRs reserved for demand access")
     tgts_per_mshr = Param.Unsigned("Max number of accesses per MSHR")
-    write_buffers = Param.Unsigned(8, "Number of write buffers")
+    write_buffers = Param.Unsigned(1, "Number of write buffers")
 
     is_read_only = Param.Bool(False, "Is this cache read only (e.g. inst)")
 

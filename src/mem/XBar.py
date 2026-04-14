@@ -164,10 +164,10 @@ class L2XBar(CoherentXBar):
 
     # Assume that most of this is covered by the cache latencies, with
     # no more than a single pipeline stage for any packet.
-    frontend_latency = 1
-    forward_latency = 0
-    response_latency = 1
-    snoop_response_latency = 1
+    frontend_latency = 5
+    forward_latency = 5
+    response_latency = 5
+    snoop_response_latency = 3
 
     # Use a snoop-filter by default, and set the latency to zero as
     # the lookup is assumed to overlap with the frontend latency of
